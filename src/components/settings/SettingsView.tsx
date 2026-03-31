@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Wallet,
 } from "lucide-react";
+import { AuthPanel } from "./AuthPanel";
 
 const rows = [
   {
@@ -44,6 +45,8 @@ export function SettingsView() {
           账户、预算与数据
         </p>
       </header>
+
+      <AuthPanel />
 
       <div className="mb-6 flex items-center gap-3 rounded-2xl border border-stone-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950">

@@ -34,6 +34,14 @@ function num(v: unknown): number {
   return 0;
 }
 
+async function requireUserId(sb: SupabaseClient): Promise<string> {
+  const { data, error } = await sb.auth.getUser();
+  if (error) throw error;
+  const id = data.user?.id;
+  if (!id) throw new Error("Not authenticated");
+  return id;
+}
+
 export async function fetchAccounts(
   sb: SupabaseClient,
 ): Promise<AccountRow[]> {
@@ -65,7 +73,9 @@ export async function insertAccount(
     profit: number | null;
   },
 ): Promise<void> {
+  const userId = await requireUserId(sb);
   const { error } = await sb.from("accounts").insert({
+    user_id: userId,
     name: params.name.trim(),
     type: params.type,
     currency: params.currency,
@@ -255,6 +265,7 @@ export async function insertTransactionAndUpdateBalance(
     occurredOn: string;
   },
 ): Promise<void> {
+  const userId = await requireUserId(sb);
   const { data: account, error: accErr } = await sb
     .from("accounts")
     .select("balance")
@@ -267,6 +278,7 @@ export async function insertTransactionAndUpdateBalance(
   const nextBalance = currentBalance + params.amount;
 
   const { error: insErr } = await sb.from("transactions").insert({
+    user_id: userId,
     account_id: params.accountId,
     category: params.category,
     title: params.title,

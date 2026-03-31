@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
+import Link from "next/link";
 import { X } from "lucide-react";
 import type { Currency } from "@/lib/mock-data";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -45,6 +46,8 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
 
   if (!open) return null;
 
+  const sb = createBrowserSupabaseClient();
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <button
@@ -73,6 +76,7 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
           </button>
         </div>
 
+        {sb ? (
         <form
           className="space-y-4"
           onSubmit={async (e) => {
@@ -107,12 +111,6 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
                 }
                 profit = p;
               }
-            }
-
-            const sb = createBrowserSupabaseClient();
-            if (!sb) {
-              setError("未配置 Supabase");
-              return;
             }
 
             setSaving(true);
@@ -234,6 +232,20 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
             {saving ? "保存中…" : "保存"}
           </button>
         </form>
+        ) : (
+          <div className="space-y-4">
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+              未配置 Supabase 环境变量，无法保存到云端。
+            </p>
+            <Link
+              href="/settings"
+              onClick={onClose}
+              className="flex w-full items-center justify-center rounded-xl bg-emerald-600 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+            >
+              去设置页登录/检查配置
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );
