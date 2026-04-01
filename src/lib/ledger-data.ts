@@ -20,9 +20,11 @@ export type TransactionListItem = {
   currency: Currency;
   accountName: string;
   date: string;
+  notes: string | null;
 };
 
 export type BudgetRow = {
+  id: string;
   category: string;
   limit: number;
   currency: Currency;
@@ -86,18 +88,94 @@ export async function insertAccount(
   if (error) throw error;
 }
 
+export async function updateAccount(
+  sb: SupabaseClient,
+  accountId: string,
+  params: {
+    name: string;
+    type: AccountRow["type"];
+    currency: Currency;
+    balance: number;
+    principal: number | null;
+    profit: number | null;
+  },
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb
+    .from("accounts")
+    .update({
+      name: params.name.trim(),
+      type: params.type,
+      currency: params.currency,
+      balance: params.balance,
+      principal: params.type === "investment" ? params.principal : null,
+      profit: params.type === "investment" ? params.profit : null,
+    })
+    .eq("id", accountId);
+  if (error) throw error;
+}
+
+export async function deleteAccount(
+  sb: SupabaseClient,
+  accountId: string,
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb.from("accounts").delete().eq("id", accountId);
+  if (error) throw error;
+}
+
 export async function fetchBudgets(sb: SupabaseClient): Promise<BudgetRow[]> {
   const { data, error } = await sb
     .from("budgets")
-    .select("category,limit_amount,currency")
+    .select("id,category,limit_amount,currency")
     .order("category", { ascending: true });
 
   if (error) throw error;
   return (data ?? []).map((r) => ({
+    id: r.id as string,
     category: r.category as string,
     limit: num(r.limit_amount),
     currency: r.currency as Currency,
   }));
+}
+
+export async function insertBudget(
+  sb: SupabaseClient,
+  params: { category: string; limit: number; currency: Currency },
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb.from("budgets").insert({
+    category: params.category.trim(),
+    limit_amount: params.limit,
+    currency: params.currency,
+  });
+  if (error) throw error;
+}
+
+export async function updateBudget(
+  sb: SupabaseClient,
+  budgetId: string,
+  params: { category: string; limit: number; currency: Currency },
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb
+    .from("budgets")
+    .update({
+      category: params.category.trim(),
+      limit_amount: params.limit,
+      currency: params.currency,
+    })
+    .eq("id", budgetId);
+  if (error) throw error;
+}
+
+export async function deleteBudget(
+  sb: SupabaseClient,
+  budgetId: string,
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb.from("budgets").delete().eq("id", budgetId);
+  if (error) throw error;
 }
 
 export async function fetchTransactions(
@@ -113,6 +191,7 @@ export async function fetchTransactions(
       amount,
       currency,
       occurred_on,
+      notes,
       accounts ( name )
     `,
     )
@@ -128,6 +207,7 @@ export async function fetchTransactions(
     amount: unknown;
     currency: string;
     occurred_on: string;
+    notes: string | null;
     accounts:
       | { name: string }
       | { name: string }[]
@@ -149,6 +229,7 @@ export async function fetchTransactions(
       currency: r.currency as Currency,
       accountName,
       date: r.occurred_on.slice(0, 10),
+      notes: r.notes ?? null,
     };
   });
 }
@@ -263,6 +344,7 @@ export async function insertTransactionAndUpdateBalance(
     amount: number;
     currency: Currency;
     occurredOn: string;
+    notes: string | null;
   },
 ): Promise<void> {
   const userId = await requireUserId(sb);
@@ -277,7 +359,7 @@ export async function insertTransactionAndUpdateBalance(
   const currentBalance = num(account?.balance);
   const nextBalance = currentBalance + params.amount;
 
-  const { error: insErr } = await sb.from("transactions").insert({
+  const row: Record<string, unknown> = {
     user_id: userId,
     account_id: params.accountId,
     category: params.category,
@@ -285,7 +367,12 @@ export async function insertTransactionAndUpdateBalance(
     amount: params.amount,
     currency: params.currency,
     occurred_on: params.occurredOn,
-  });
+  };
+  if (params.notes != null && params.notes.trim() !== "") {
+    row.notes = params.notes.trim();
+  }
+
+  const { error: insErr } = await sb.from("transactions").insert(row);
   if (insErr) throw insErr;
 
   const { error: updErr } = await sb

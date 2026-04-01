@@ -1,5 +1,5 @@
 # 个人记账项目进展
-_Exported on 3/31/2026 at 21:58:25 GMT+9 from Cursor (2.6.22)_
+_Exported on 3/31/2026 at 22:37:18 GMT+9 from Cursor (2.6.22)_
 
 ---
 
@@ -794,4 +794,52 @@ alter table public.budgets
   - 手机、电脑都可以直接访问这个域名正式使用；本地 dev 只用来开发新功能。
 
 如果你愿意，我可以下一条直接帮你列一份「适合 copy 的 Vercel 部署检查清单」，包括：仓库要包含哪些文件、不应该提交什么（比如 `.env.local`）。
+
+---
+
+**User**
+
+部署完成以后，打开网页，在资产tab想要增加账户却显示 保存失败，请检查网络与权限
+
+---
+
+**Cursor**
+
+先定位原因：Vercel 上是“匿名未登录”状态，而你现在的 RLS 已经按 `auth.uid()` 收紧，所以插入账户会被数据库拒绝，前端就只看到“保存失败”。我先把当前 `settings` 页和 Supabase 客户端用法看一眼，然后给你加一个最小可用的登录/会话保持，并让写入带上 `user_id`。
+
+我会把问题一次性修好：在应用里加一个最小的「登录/登出」入口（放在`设置`页），并让所有写入（添加账户、记一笔）在插入时自动带上`user_id = auth.uid()`；这样在你启用 RLS 后，Vercel 上也能正常保存。同时我会补一段 SQL，把 `budgets` 的唯一约束改成对多用户友好的 `(user_id, category)`。接下来我开始改代码并跑一次构建验证。
+
+## 原因（你在 Vercel 上“保存失败”的根本原因）
+
+你已经把 Supabase **RLS 收紧到 `user_id = auth.uid()`**，但 Vercel 打开的网页里**还没有登录会话**，所以 `auth.uid()` 是 `null`，任何 `insert` 都会被拒绝。
+
+## 我已在代码里修复（让它可正式使用 & 未来可扩展）
+
+- **新增登录入口**：`设置`页加入了 `AuthPanel`（邮箱+密码登录、显示 userId、退出登录）
+  - 文件：`src/components/settings/AuthPanel.tsx`
+  - 已挂到：`src/components/settings/SettingsView.tsx`
+- **写入时自动带 `user_id`**（不再依赖数据库默认值，也不硬编码你的 uuid）
+  - `insertAccount()` 现在会先 `sb.auth.getUser()`，拿到 `user.id`，插入时写入 `user_id`
+  - `insertTransactionAndUpdateBalance()` 同理
+  - 文件：`src/lib/ledger-data.ts`
+- **构建已通过**（本地 `npm run build` OK）
+
+## 你现在在 Vercel 上怎么用
+
+1. 重新部署到 Vercel（push 一次代码，Vercel 自动触发部署）
+2. 打开线上网站 → **设置** → 用你 Supabase Auth 的邮箱密码登录
+3. 回到 **资产** → 添加账户 → 现在应该能保存成功
+4. 再去 **记账** → 记一笔也能保存
+
+## 重要的数据库补充（为“多用户扩展性”准备）
+
+你目前 `budgets` 表在最初 migration 里是 `category unique`，多用户时会冲突。建议你在 Supabase SQL Editor 再执行一次（只需一次）：
+
+```sql
+alter table public.budgets drop constraint if exists budgets_category_key;
+create unique index if not exists budgets_user_category_uidx
+  on public.budgets (user_id, category);
+```
+
+如果你把最新部署的 Vercel 地址打开后，登录仍失败或保存仍报错，把浏览器控制台里那条 Supabase 错误（通常包含 `permission denied` / `RLS` / `violates row-level security`）贴我，我可以精确对齐策略/字段名再补一刀。
 

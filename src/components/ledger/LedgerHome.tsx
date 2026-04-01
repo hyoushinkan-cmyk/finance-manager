@@ -52,6 +52,7 @@ export function LedgerHome() {
           currency: t.currency,
           accountName: t.accountName,
           date: t.date,
+          notes: null,
         })),
       );
       setAccounts(
@@ -157,8 +158,13 @@ export function LedgerHome() {
                 <div className="min-w-0">
                   <p className="truncate font-medium">{t.title}</p>
                   <p className="truncate text-xs text-stone-500 dark:text-stone-400">
-                    {t.category} · {t.accountName}
+                    {t.category} · {t.accountName} · {t.date}
                   </p>
+                  {t.notes ? (
+                    <p className="mt-0.5 line-clamp-2 text-xs text-stone-400 dark:text-stone-500">
+                      {t.notes}
+                    </p>
+                  ) : null}
                 </div>
                 <p
                   className={`shrink-0 text-sm font-semibold tabular-nums ${

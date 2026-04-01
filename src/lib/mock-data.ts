@@ -81,4 +81,16 @@ export const mockBudgets = [
   { category: "购物", spent: 8_900, limit: 30_000, currency: "JPY" as Currency },
 ];
 
-export const mockCategories = ["餐饮", "交通", "购物", "居住", "娱乐", "医疗", "转账", "其他"];
+export const mockCategories = [
+  "餐饮",
+  "交通",
+  "购物",
+  "居住",
+  "娱乐",
+  "医疗",
+  "转账",
+  "其他",
+];
+
+/** 收入类记账分类 */
+export const mockIncomeCategories = ["工资", "奖金", "额外收入"] as const;

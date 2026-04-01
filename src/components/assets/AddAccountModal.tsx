@@ -5,15 +5,26 @@ import Link from "next/link";
 import { X } from "lucide-react";
 import type { Currency } from "@/lib/mock-data";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import { insertAccount, type AccountRow } from "@/lib/ledger-data";
+import {
+  insertAccount,
+  updateAccount,
+  type AccountRow,
+} from "@/lib/ledger-data";
 
 type Props = {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
+  /** 传入时为编辑该账户 */
+  editingAccount?: AccountRow | null;
 };
 
-export function AddAccountModal({ open, onClose, onSaved }: Props) {
+export function AddAccountModal({
+  open,
+  onClose,
+  onSaved,
+  editingAccount = null,
+}: Props) {
   const titleId = useId();
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountRow["type"]>("cash");
@@ -35,14 +46,27 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    setName("");
-    setType("cash");
-    setCurrency("JPY");
-    setBalanceStr("0");
-    setPrincipalStr("");
-    setProfitStr("");
+    if (editingAccount) {
+      setName(editingAccount.name);
+      setType(editingAccount.type);
+      setCurrency(editingAccount.currency);
+      setBalanceStr(String(editingAccount.balance));
+      setPrincipalStr(
+        editingAccount.principal != null ? String(editingAccount.principal) : "",
+      );
+      setProfitStr(
+        editingAccount.profit != null ? String(editingAccount.profit) : "",
+      );
+    } else {
+      setName("");
+      setType("cash");
+      setCurrency("JPY");
+      setBalanceStr("0");
+      setPrincipalStr("");
+      setProfitStr("");
+    }
     setError(null);
-  }, [open]);
+  }, [open, editingAccount]);
 
   if (!open) return null;
 
@@ -64,7 +88,7 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 id={titleId} className="text-lg font-semibold tracking-tight">
-            添加账户
+            {editingAccount ? "编辑账户" : "添加账户"}
           </h2>
           <button
             type="button"
@@ -115,14 +139,25 @@ export function AddAccountModal({ open, onClose, onSaved }: Props) {
 
             setSaving(true);
             try {
-              await insertAccount(sb, {
-                name: trimmed,
-                type,
-                currency,
-                balance,
-                principal,
-                profit,
-              });
+              if (editingAccount) {
+                await updateAccount(sb, editingAccount.id, {
+                  name: trimmed,
+                  type,
+                  currency,
+                  balance,
+                  principal,
+                  profit,
+                });
+              } else {
+                await insertAccount(sb, {
+                  name: trimmed,
+                  type,
+                  currency,
+                  balance,
+                  principal,
+                  profit,
+                });
+              }
               onSaved();
               onClose();
             } catch (err) {
