@@ -5,10 +5,17 @@ import {
   Landmark,
   PieChart,
   RefreshCw,
+  Tag,
 } from "lucide-react";
 import { AuthPanel } from "./AuthPanel";
 
 const rows = [
+  {
+    href: "/settings/categories" as const,
+    icon: Tag,
+    title: "分类管理",
+    desc: "支出和收入分类",
+  },
   {
     href: "/settings/accounts" as const,
     icon: Landmark,

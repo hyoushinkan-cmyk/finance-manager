@@ -194,7 +194,7 @@ export function StatsView() {
                   ];
                   return (
                     <div
-                      key={c.name}
+                      key={`bar-${i}-${c.name}`}
                       className={`${hues[i % hues.length]} first:rounded-l-lg last:rounded-r-lg`}
                       style={{ width: `${c.pct}%` }}
                       title={`${c.name} ${c.pct}%`}
@@ -213,7 +213,7 @@ export function StatsView() {
                   ];
                   return (
                     <li
-                      key={c.name}
+                      key={`row-${i}-${c.name}`}
                       className="flex items-center justify-between text-sm"
                     >
                       <span className="flex items-center gap-2">

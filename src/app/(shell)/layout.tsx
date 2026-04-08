@@ -7,7 +7,7 @@ export default function ShellLayout({
 }) {
   return (
     <div className="relative mx-auto min-h-dvh max-w-lg">
-      <div className="pb-safe px-4 pb-24 pt-4">{children}</div>
+      <div className="pb-safe px-4 pb-28 pt-4">{children}</div>
       <BottomNav />
     </div>
   );

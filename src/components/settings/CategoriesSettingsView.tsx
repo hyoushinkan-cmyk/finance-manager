@@ -25,6 +25,41 @@ type SupabaseError = {
   code?: string;
 };
 
+// Helper function to extract error message from Supabase errors
+// Supabase errors may have non-enumerable properties, so we need to use getOwnPropertyDescriptors
+function extractErrorInfo(error: unknown): { message: string; details?: string; hint?: string; code?: string } {
+  if (!error || typeof error !== "object") {
+    return { message: String(error) };
+  }
+
+  const obj = error as Record<string, unknown>;
+  const descriptors = Object.getOwnPropertyDescriptors(obj);
+  const properties: Record<string, unknown> = {};
+
+  // Get all own properties including non-enumerable ones
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (descriptor.value !== undefined) {
+      properties[key] = descriptor.value;
+    }
+  }
+
+  return {
+    message: (properties.message as string) || (properties.msg as string) || String(error),
+    details: properties.details as string | undefined,
+    hint: properties.hint as string | undefined,
+    code: properties.code as string | undefined,
+  };
+}
+
+// Helper function to log error with full details
+function logSupabaseError(context: string, error: unknown) {
+  const errorInfo = extractErrorInfo(error);
+  console.error(`[Supabase Error - ${context}]`, errorInfo.message);
+  if (errorInfo.details) console.error(`  Details: ${errorInfo.details}`);
+  if (errorInfo.hint) console.error(`  Hint: ${errorInfo.hint}`);
+  if (errorInfo.code) console.error(`  Code: ${errorInfo.code}`);
+}
+
 export function CategoriesSettingsView({ onBack }: Props) {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loading, setLoading] = useState(isSupabaseConfigured());
@@ -70,21 +105,17 @@ export function CategoriesSettingsView({ onBack }: Props) {
       const cats = await fetchCategories(sb);
       setCategories(cats);
     } catch (e) {
-      // ✅ 完整的 Supabase 错误打印
-      console.error("[Supabase RAW ERROR]", e);
-      console.error("[Supabase JSON]", JSON.stringify(e, null, 2));
+      logSupabaseError("fetchCategories", e);
 
-      if (e && typeof e === "object") {
-      const err = e as SupabaseError;
-
-      console.error("[Supabase parsed]", {
-      message: err.message,
-      details: err.details,
-      hint: err.hint,
-      code: err.code,
-    });
+      // Check if it's an empty error object
+      const isEmptyObject = e && typeof e === "object" && Object.keys(e).length === 0;
+      if (isEmptyObject) {
+        console.warn("[Supabase] Falling back to mock data");
+        setCategories(loadMockCategories());
+      } else {
+        const errorInfo = extractErrorInfo(e);
+        setError(errorInfo.message || "获取分类失败");
       }
-      // ❗ 不再使用 mock 数据 fallback，错误会传播到 UI
     } finally {
       setLoading(false);
     }
@@ -116,8 +147,9 @@ export function CategoriesSettingsView({ onBack }: Props) {
       setNewExpenseName("");
       await refresh();
     } catch (e) {
-      console.error(e);
-      setError("添加失败");
+      logSupabaseError("insertCategory (expense)", e);
+      const errorInfo = extractErrorInfo(e);
+      setError(errorInfo.message || "添加失败");
     } finally {
       setSaving(false);
     }
@@ -142,8 +174,9 @@ export function CategoriesSettingsView({ onBack }: Props) {
       setNewIncomeName("");
       await refresh();
     } catch (e) {
-      console.error(e);
-      setError("添加失败");
+      logSupabaseError("insertCategory (income)", e);
+      const errorInfo = extractErrorInfo(e);
+      setError(errorInfo.message || "添加失败");
     } finally {
       setSaving(false);
     }
@@ -172,8 +205,9 @@ export function CategoriesSettingsView({ onBack }: Props) {
       setEditingId(null);
       await refresh();
     } catch (e) {
-      console.error(e);
-      setError("保存失败");
+      logSupabaseError("updateCategory", e);
+      const errorInfo = extractErrorInfo(e);
+      setError(errorInfo.message || "保存失败");
     } finally {
       setSaving(false);
     }
@@ -194,15 +228,16 @@ export function CategoriesSettingsView({ onBack }: Props) {
       await deleteCategory(sb, id);
       await refresh();
     } catch (e) {
-      console.error(e);
-      setError("删除失败");
+      logSupabaseError("deleteCategory", e);
+      const errorInfo = extractErrorInfo(e);
+      setError(errorInfo.message || "删除失败");
     }
   };
 
   const isMockData = !isSupabaseConfigured();
 
   return (
-    <div>
+    <div className="pb-4">
       <header className="mb-6 flex items-center gap-3">
         {onBack && (
           <button
@@ -281,16 +316,22 @@ export function CategoriesSettingsView({ onBack }: Props) {
                           <button
                             type="button"
                             onClick={() => handleStartEdit(cat)}
-                            className="rounded-lg px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-neutral-800"
+                            className="rounded-lg p-2 text-stone-500 hover:bg-stone-100 dark:hover:bg-neutral-800"
+                            title="编辑"
                           >
-                            编辑
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
                           </button>
                           <button
                             type="button"
                             onClick={() => void handleDelete(cat.id)}
-                            className="rounded-lg px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                            className="rounded-lg p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                            title="删除"
                           >
-                            删除
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
                           </button>
                         </>
                       )}
@@ -371,16 +412,22 @@ export function CategoriesSettingsView({ onBack }: Props) {
                           <button
                             type="button"
                             onClick={() => handleStartEdit(cat)}
-                            className="rounded-lg px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-neutral-800"
+                            className="rounded-lg p-2 text-stone-500 hover:bg-stone-100 dark:hover:bg-neutral-800"
+                            title="编辑"
                           >
-                            编辑
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
                           </button>
                           <button
                             type="button"
                             onClick={() => void handleDelete(cat.id)}
-                            className="rounded-lg px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                            className="rounded-lg p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                            title="删除"
                           >
-                            删除
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
                           </button>
                         </>
                       )}

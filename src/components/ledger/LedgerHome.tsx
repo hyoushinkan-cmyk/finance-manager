@@ -252,7 +252,7 @@ export function LedgerHome() {
       <button
         type="button"
         onClick={handleNew}
-        className="pb-safe fixed bottom-24 right-4 z-30 flex h-14 items-center gap-2 rounded-full bg-emerald-600 px-5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/25 transition hover:bg-emerald-700 active:scale-95 dark:bg-emerald-500 dark:hover:bg-emerald-600 sm:right-[max(1rem,calc(50%-16rem))]"
+        className="pb-safe fixed bottom-28 right-4 z-30 flex h-14 items-center gap-2 rounded-full bg-emerald-600 px-5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/25 transition hover:bg-emerald-700 active:scale-95 dark:bg-emerald-500 dark:hover:bg-emerald-600 sm:right-[max(1rem,calc(50%-16rem))]"
       >
         <Plus className="h-5 w-5" strokeWidth={2.5} aria-hidden />
         记一笔
