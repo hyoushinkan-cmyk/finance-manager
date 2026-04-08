@@ -30,6 +30,13 @@ export type BudgetRow = {
   currency: Currency;
 };
 
+export type CategoryRow = {
+  id: string;
+  name: string;
+  type: "expense" | "income";
+  sort_order: number;
+};
+
 function num(v: unknown): number {
   if (typeof v === "number") return v;
   if (typeof v === "string") return Number(v);
@@ -175,6 +182,63 @@ export async function deleteBudget(
 ): Promise<void> {
   await requireUserId(sb);
   const { error } = await sb.from("budgets").delete().eq("id", budgetId);
+  if (error) throw error;
+}
+
+// 分类管理函数
+export async function fetchCategories(
+  sb: SupabaseClient,
+): Promise<CategoryRow[]> {
+  const { data, error } = await sb
+    .from("categories")
+    .select("id,name,type,sort_order")
+    .order("type", { ascending: true })
+    .order("sort_order", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    type: r.type as "expense" | "income",
+    sort_order: num(r.sort_order),
+  }));
+}
+
+export async function insertCategory(
+  sb: SupabaseClient,
+  params: { name: string; type: "expense" | "income" },
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb.from("categories").insert({
+    name: params.name.trim(),
+    type: params.type,
+    sort_order: 0,
+  });
+  if (error) throw error;
+}
+
+export async function updateCategory(
+  sb: SupabaseClient,
+  categoryId: string,
+  params: { name: string },
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb
+    .from("categories")
+    .update({ name: params.name.trim() })
+    .eq("id", categoryId);
+  if (error) throw error;
+}
+
+export async function deleteCategory(
+  sb: SupabaseClient,
+  categoryId: string,
+): Promise<void> {
+  await requireUserId(sb);
+  const { error } = await sb
+    .from("categories")
+    .delete()
+    .eq("id", categoryId);
   if (error) throw error;
 }
 
@@ -380,4 +444,142 @@ export async function insertTransactionAndUpdateBalance(
     .update({ balance: nextBalance })
     .eq("id", params.accountId);
   if (updErr) throw updErr;
+}
+
+export async function updateTransaction(
+  sb: SupabaseClient,
+  transactionId: string,
+  params: {
+    accountId: string;
+    category: string;
+    title: string;
+    amount: number;
+    currency: Currency;
+    occurredOn: string;
+    notes: string | null;
+  },
+): Promise<void> {
+  const userId = await requireUserId(sb);
+
+  // 获取当前交易记录
+  const { data: currentTx, error: fetchErr } = await sb
+    .from("transactions")
+    .select("amount, account_id")
+    .eq("id", transactionId)
+    .single();
+
+  if (fetchErr) throw fetchErr;
+  if (!currentTx) throw new Error("Transaction not found");
+
+  const oldAmount = num(currentTx.amount);
+  const oldAccountId = currentTx.account_id as string;
+  const amountDiff = params.amount - oldAmount;
+
+  // 如果更换了账户，需要从旧账户减去旧金额，新账户加上新金额
+  // 否则只需要调整金额差异
+  if (oldAccountId !== params.accountId) {
+    // 旧账户：回滚旧金额
+    const { data: oldAccount, error: oldAccErr } = await sb
+      .from("accounts")
+      .select("balance")
+      .eq("id", oldAccountId)
+      .single();
+    if (oldAccErr) throw oldAccErr;
+
+    const { error: oldUpdErr } = await sb
+      .from("accounts")
+      .update({ balance: num(oldAccount?.balance) - oldAmount })
+      .eq("id", oldAccountId);
+    if (oldUpdErr) throw oldUpdErr;
+
+    // 新账户：加上新金额
+    const { data: newAccount, error: newAccErr } = await sb
+      .from("accounts")
+      .select("balance")
+      .eq("id", params.accountId)
+      .single();
+    if (newAccErr) throw newAccErr;
+
+    const { error: newUpdErr } = await sb
+      .from("accounts")
+      .update({ balance: num(newAccount?.balance) + params.amount })
+      .eq("id", params.accountId);
+    if (newUpdErr) throw newUpdErr;
+  } else if (amountDiff !== 0) {
+    // 同一账户，只需调整差额
+    const { data: account, error: accErr } = await sb
+      .from("accounts")
+      .select("balance")
+      .eq("id", params.accountId)
+      .single();
+    if (accErr) throw accErr;
+
+    const { error: updErr } = await sb
+      .from("accounts")
+      .update({ balance: num(account?.balance) + amountDiff })
+      .eq("id", params.accountId);
+    if (updErr) throw updErr;
+  }
+
+  // 更新交易记录
+  const row: Record<string, unknown> = {
+    category: params.category,
+    title: params.title,
+    amount: params.amount,
+    currency: params.currency,
+    occurred_on: params.occurredOn,
+  };
+  if (params.notes != null && params.notes.trim() !== "") {
+    row.notes = params.notes.trim();
+  } else {
+    row.notes = null;
+  }
+
+  const { error: updErr } = await sb
+    .from("transactions")
+    .update(row)
+    .eq("id", transactionId);
+  if (updErr) throw updErr;
+}
+
+export async function deleteTransaction(
+  sb: SupabaseClient,
+  transactionId: string,
+): Promise<void> {
+  const userId = await requireUserId(sb);
+
+  // 获取当前交易记录
+  const { data: currentTx, error: fetchErr } = await sb
+    .from("transactions")
+    .select("amount, account_id")
+    .eq("id", transactionId)
+    .eq("user_id", userId)
+    .single();
+
+  if (fetchErr) throw fetchErr;
+  if (!currentTx) throw new Error("Transaction not found");
+
+  const txAmount = num(currentTx.amount);
+  const txAccountId = currentTx.account_id as string;
+
+  // 回滚账户余额
+  const { data: account, error: accErr } = await sb
+    .from("accounts")
+    .select("balance")
+    .eq("id", txAccountId)
+    .single();
+  if (accErr) throw accErr;
+
+  const { error: updErr } = await sb
+    .from("accounts")
+    .update({ balance: num(account?.balance) - txAmount })
+    .eq("id", txAccountId);
+  if (updErr) throw updErr;
+
+  // 删除交易记录
+  const { error: delErr } = await sb
+    .from("transactions")
+    .delete()
+    .eq("id", transactionId);
+  if (delErr) throw delErr;
 }

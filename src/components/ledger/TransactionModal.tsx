@@ -8,13 +8,17 @@ import {
   createBrowserSupabaseClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
-import { insertTransactionAndUpdateBalance } from "@/lib/ledger-data";
-import type { AccountRow } from "@/lib/ledger-data";
+import {
+  insertTransactionAndUpdateBalance,
+  updateTransaction,
+} from "@/lib/ledger-data";
+import type { AccountRow, TransactionListItem } from "@/lib/ledger-data";
 
 type Props = {
   open: boolean;
-  onClose: () => void;
   accounts: AccountRow[];
+  transaction?: TransactionListItem | null; // 编辑模式时传入
+  onClose: () => void;
   onSaved: () => void;
 };
 
@@ -27,10 +31,12 @@ function toYmdLocal(d: Date): string {
 
 export function TransactionModal({
   open,
-  onClose,
   accounts,
+  transaction,
+  onClose,
   onSaved,
 }: Props) {
+  const isEditMode = !!transaction;
   const titleId = useId();
   const [flowKind, setFlowKind] = useState<"expense" | "income">("expense");
   const [amountStr, setAmountStr] = useState("");
@@ -41,6 +47,7 @@ export function TransactionModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 当弹窗打开或交易数据变化时，初始化表单
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -51,15 +58,32 @@ export function TransactionModal({
   }, [open]);
 
   useEffect(() => {
-    if (!open || accounts.length === 0) return;
-    setFlowKind("expense");
-    setAmountStr("");
-    setCategory(mockCategories[0] ?? "其他");
-    setAccountId(accounts[0].id);
-    setOccurredOn(toYmdLocal(new Date()));
-    setNotes("");
+    if (!open) return;
+
+    if (transaction) {
+      // 编辑模式：填充现有数据
+      const isExpense = transaction.amount < 0;
+      setFlowKind(isExpense ? "expense" : "income");
+      setAmountStr(Math.abs(transaction.amount).toString());
+      setCategory(transaction.category);
+      setOccurredOn(transaction.date);
+      setNotes(transaction.notes ?? "");
+      // 需要找到对应的账户ID
+      const matchingAccount = accounts.find(
+        (a) => a.name === transaction.accountName && a.currency === transaction.currency
+      );
+      setAccountId(matchingAccount?.id ?? accounts[0]?.id ?? "");
+    } else {
+      // 新建模式
+      setFlowKind("expense");
+      setAmountStr("");
+      setCategory(mockCategories[0] ?? "其他");
+      setAccountId(accounts[0]?.id ?? "");
+      setOccurredOn(toYmdLocal(new Date()));
+      setNotes("");
+    }
     setError(null);
-  }, [open, accounts]);
+  }, [open, transaction, accounts]);
 
   useEffect(() => {
     if (flowKind === "expense") {
@@ -98,7 +122,7 @@ export function TransactionModal({
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 id={titleId} className="text-lg font-semibold tracking-tight">
-            记一笔
+            {isEditMode ? "编辑记录" : "记一笔"}
           </h2>
           <button
             type="button"
@@ -162,20 +186,34 @@ export function TransactionModal({
 
               setSaving(true);
               try {
-                await insertTransactionAndUpdateBalance(sb, {
-                  accountId: selectedAccount.id,
-                  category,
-                  title,
-                  amount: storedAmount,
-                  currency: currencySave,
-                  occurredOn,
-                  notes: notesTrim === "" ? null : notesTrim,
-                });
+                if (isEditMode && transaction) {
+                  // 更新模式
+                  await updateTransaction(sb, transaction.id, {
+                    accountId: selectedAccount.id,
+                    category,
+                    title,
+                    amount: storedAmount,
+                    currency: currencySave,
+                    occurredOn,
+                    notes: notesTrim === "" ? null : notesTrim,
+                  });
+                } else {
+                  // 新建模式
+                  await insertTransactionAndUpdateBalance(sb, {
+                    accountId: selectedAccount.id,
+                    category,
+                    title,
+                    amount: storedAmount,
+                    currency: currencySave,
+                    occurredOn,
+                    notes: notesTrim === "" ? null : notesTrim,
+                  });
+                }
                 onSaved();
                 onClose();
               } catch (err) {
                 console.error(err);
-                setError("保存失败，请检查网络与 Supabase 配置");
+                setError(isEditMode ? "更新失败，请检查网络与 Supabase 配置" : "保存失败，请检查网络与 Supabase 配置");
               } finally {
                 setSaving(false);
               }
@@ -300,7 +338,7 @@ export function TransactionModal({
               disabled={saving || accounts.length === 0}
               className="w-full rounded-xl bg-emerald-600 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
-              {saving ? "保存中…" : "保存"}
+              {saving ? (isEditMode ? "更新中…" : "保存中…") : (isEditMode ? "更新" : "保存")}
             </button>
           </form>
         )}

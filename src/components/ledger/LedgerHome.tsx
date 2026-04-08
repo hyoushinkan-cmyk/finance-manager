@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Pencil, Trash2 } from "lucide-react";
 import { mockAccounts, mockTransactions } from "@/lib/mock-data";
 import {
   createBrowserSupabaseClient,
@@ -12,6 +12,7 @@ import {
   fetchTransactions,
   spendJpyOnDate,
   spendJpyInMonth,
+  deleteTransaction,
   type AccountRow,
   type TransactionListItem,
 } from "@/lib/ledger-data";
@@ -36,9 +37,11 @@ function toYmdLocal(d: Date): string {
 
 export function LedgerHome() {
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<TransactionListItem | null>(null);
   const [transactions, setTransactions] = useState<TransactionListItem[]>([]);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [loading, setLoading] = useState(isSupabaseConfigured());
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const sb = createBrowserSupabaseClient();
@@ -100,6 +103,50 @@ export function LedgerHome() {
   const todaySpend = spendJpyOnDate(txForAgg, todayStr);
   const monthSpend = spendJpyInMonth(txForAgg, y, m);
 
+  const handleEdit = (transaction: TransactionListItem) => {
+    setEditingTransaction(transaction);
+    setModalOpen(true);
+  };
+
+  const handleNew = () => {
+    setEditingTransaction(null);
+    setModalOpen(true);
+  };
+
+  const handleDelete = async (transaction: TransactionListItem) => {
+    if (!window.confirm(`确定要删除「${transaction.title}」这条记录吗？`)) {
+      return;
+    }
+
+    if (!isSupabaseConfigured()) {
+      // Mock 模式下只刷新列表
+      void refresh();
+      return;
+    }
+
+    const sb = createBrowserSupabaseClient();
+    if (!sb) {
+      void refresh();
+      return;
+    }
+
+    setDeletingId(transaction.id);
+    try {
+      await deleteTransaction(sb, transaction.id);
+      void refresh();
+    } catch (err) {
+      console.error("删除失败:", err);
+      alert("删除失败，请稍后重试");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleModalClose = () => {
+    setModalOpen(false);
+    setEditingTransaction(null);
+  };
+
   return (
     <>
       <header className="mb-6">
@@ -155,7 +202,7 @@ export function LedgerHome() {
                 key={t.id}
                 className="flex items-center justify-between gap-3 px-4 py-3.5"
               >
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{t.title}</p>
                   <p className="truncate text-xs text-stone-500 dark:text-stone-400">
                     {t.category} · {t.accountName} · {t.date}
@@ -166,15 +213,36 @@ export function LedgerHome() {
                     </p>
                   ) : null}
                 </div>
-                <p
-                  className={`shrink-0 text-sm font-semibold tabular-nums ${
-                    t.amount < 0
-                      ? "text-stone-800 dark:text-stone-200"
-                      : "text-emerald-600 dark:text-emerald-400"
-                  }`}
-                >
-                  {formatMoney(t.amount, t.currency)}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p
+                    className={`shrink-0 text-sm font-semibold tabular-nums ${
+                      t.amount < 0
+                        ? "text-stone-800 dark:text-stone-200"
+                        : "text-emerald-600 dark:text-emerald-400"
+                    }`}
+                  >
+                    {formatMoney(t.amount, t.currency)}
+                  </p>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleEdit(t)}
+                      className="rounded-lg p-2 text-stone-400 hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-neutral-800 dark:hover:text-stone-300"
+                      aria-label="编辑"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(t)}
+                      disabled={deletingId === t.id}
+                      className="rounded-lg p-2 text-stone-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30 dark:hover:text-red-400 disabled:opacity-50"
+                      aria-label="删除"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
               </li>
             ))
           )}
@@ -183,7 +251,7 @@ export function LedgerHome() {
 
       <button
         type="button"
-        onClick={() => setModalOpen(true)}
+        onClick={handleNew}
         className="pb-safe fixed bottom-24 right-4 z-30 flex h-14 items-center gap-2 rounded-full bg-emerald-600 px-5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/25 transition hover:bg-emerald-700 active:scale-95 dark:bg-emerald-500 dark:hover:bg-emerald-600 sm:right-[max(1rem,calc(50%-16rem))]"
       >
         <Plus className="h-5 w-5" strokeWidth={2.5} aria-hidden />
@@ -193,7 +261,8 @@ export function LedgerHome() {
       <TransactionModal
         open={modalOpen}
         accounts={accounts}
-        onClose={() => setModalOpen(false)}
+        transaction={editingTransaction}
+        onClose={handleModalClose}
         onSaved={() => void refresh()}
       />
     </>
