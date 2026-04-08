@@ -18,6 +18,13 @@ type Props = {
   onBack?: () => void;
 };
 
+type SupabaseError = {
+  message: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+};
+
 export function CategoriesSettingsView({ onBack }: Props) {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loading, setLoading] = useState(isSupabaseConfigured());
@@ -68,13 +75,14 @@ export function CategoriesSettingsView({ onBack }: Props) {
       console.error("[Supabase JSON]", JSON.stringify(e, null, 2));
 
       if (e && typeof e === "object") {
-        const err = e as Error;
-        console.error("[Supabase parsed]", {
-          message: err.message,
-          details: err.details,
-          hint: err.hint,
-          code: err.code,
-        });
+      const err = e as SupabaseError;
+
+      console.error("[Supabase parsed]", {
+      message: err.message,
+      details: err.details,
+      hint: err.hint,
+      code: err.code,
+    });
       }
       // ❗ 不再使用 mock 数据 fallback，错误会传播到 UI
     } finally {
