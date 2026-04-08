@@ -68,7 +68,7 @@ export function CategoriesSettingsView({ onBack }: Props) {
       console.error("[Supabase JSON]", JSON.stringify(e, null, 2));
 
       if (e && typeof e === "object") {
-        const err = e as any;
+        const err = e as Error;
         console.error("[Supabase parsed]", {
           message: err.message,
           details: err.details,
