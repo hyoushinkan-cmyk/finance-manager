@@ -15,6 +15,7 @@ import {
   fetchBudgets,
   fetchTransactionsForStats,
   type AccountRow,
+  type BudgetRow,
 } from "@/lib/ledger-data";
 import { AddAccountModal } from "./AddAccountModal";
 
@@ -47,9 +48,7 @@ function monthRangeYmd(): { y: number; m: number; from: string; to: string } {
 export function AssetsView() {
   const [displayCurrency, setDisplayCurrency] = useState<Currency>("JPY");
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
-  const [budgetLimits, setBudgetLimits] = useState<
-    { id: string; category: string; limit: number; currency: Currency }[]
-  >([]);
+  const [budgetLimits, setBudgetLimits] = useState<BudgetRow[]>([]);
   const [spentByCategoryJpy, setSpentByCategoryJpy] = useState<
     Map<string, number>
   >(new Map());
@@ -83,7 +82,8 @@ export function AssetsView() {
       setBudgetLimits(
         mockBudgets.map((b, i) => ({
           id: `mock-budget-${i}`,
-          category: b.category,
+          categoryId: `mock-cat-${i}`,
+          categoryName: b.category,
           limit: b.limit,
           currency: b.currency,
         })),
@@ -132,10 +132,10 @@ export function AssetsView() {
   }, [accounts, displayCurrency, jpyPerCny]);
 
   const budgetRows = budgetLimits.map((b) => {
-    const spentJpy = spentByCategoryJpy.get(b.category) ?? 0;
+    const spentJpy = spentByCategoryJpy.get(b.categoryName) ?? 0;
     return {
       id: b.id,
-      category: b.category,
+      category: b.categoryName,
       spent: spentJpy,
       limit: b.limit,
       currency: b.currency,

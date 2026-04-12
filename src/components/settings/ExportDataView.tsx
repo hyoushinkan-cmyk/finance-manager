@@ -44,7 +44,7 @@ export function ExportDataView() {
           [
             csvEscape(r.date),
             csvEscape(r.title),
-            csvEscape(r.category),
+            csvEscape(r.categoryName),
             String(r.amount),
             csvEscape(r.currency),
             csvEscape(r.accountName),

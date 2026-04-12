@@ -15,7 +15,8 @@ export type AccountRow = {
 export type TransactionListItem = {
   id: string;
   title: string;
-  category: string;
+  categoryId: string;
+  categoryName: string;
   amount: number;
   currency: Currency;
   accountName: string;
@@ -25,7 +26,8 @@ export type TransactionListItem = {
 
 export type BudgetRow = {
   id: string;
-  category: string;
+  categoryId: string;
+  categoryName: string;
   limit: number;
   currency: Currency;
 };
@@ -134,25 +136,46 @@ export async function deleteAccount(
 export async function fetchBudgets(sb: SupabaseClient): Promise<BudgetRow[]> {
   const { data, error } = await sb
     .from("budgets")
-    .select("id,category,limit_amount,currency")
-    .order("category", { ascending: true });
+    .select(`
+      id,
+      category_id,
+      limit_amount,
+      currency,
+      categories ( name )
+    `)
+    .order("created_at", { ascending: true });
 
   if (error) throw error;
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    category: r.category as string,
-    limit: num(r.limit_amount),
-    currency: r.currency as Currency,
-  }));
+
+  type Row = {
+    id: string;
+    category_id: string | null;
+    limit_amount: unknown;
+    currency: string;
+    categories: { name: string } | null;
+  };
+
+  return (data ?? []).map((r) => {
+    const row = r as unknown as Row;
+    const categoryName = row.categories?.name ?? "";
+
+    return {
+      id: row.id,
+      categoryId: row.category_id ?? "",
+      categoryName,
+      limit: num(row.limit_amount),
+      currency: row.currency as Currency,
+    };
+  });
 }
 
 export async function insertBudget(
   sb: SupabaseClient,
-  params: { category: string; limit: number; currency: Currency },
+  params: { categoryId: string; limit: number; currency: Currency },
 ): Promise<void> {
   await requireUserId(sb);
   const { error } = await sb.from("budgets").insert({
-    category: params.category.trim(),
+    category_id: params.categoryId,
     limit_amount: params.limit,
     currency: params.currency,
   });
@@ -162,13 +185,13 @@ export async function insertBudget(
 export async function updateBudget(
   sb: SupabaseClient,
   budgetId: string,
-  params: { category: string; limit: number; currency: Currency },
+  params: { categoryId: string; limit: number; currency: Currency },
 ): Promise<void> {
   await requireUserId(sb);
   const { error } = await sb
     .from("budgets")
     .update({
-      category: params.category.trim(),
+      category_id: params.categoryId,
       limit_amount: params.limit,
       currency: params.currency,
     })
@@ -251,12 +274,13 @@ export async function fetchTransactions(
       `
       id,
       title,
-      category,
+      category_id,
       amount,
       currency,
       occurred_on,
       notes,
-      accounts ( name )
+      accounts ( name ),
+      categories ( name )
     `,
     )
     .order("occurred_on", { ascending: false })
@@ -267,12 +291,16 @@ export async function fetchTransactions(
   type Row = {
     id: string;
     title: string;
-    category: string;
+    category_id: string | null;
     amount: unknown;
     currency: string;
     occurred_on: string;
     notes: string | null;
     accounts:
+      | { name: string }
+      | { name: string }[]
+      | null;
+    categories:
       | { name: string }
       | { name: string }[]
       | null;
@@ -285,10 +313,16 @@ export async function fetchTransactions(
       ? (acc[0]?.name ?? "")
       : (acc?.name ?? "");
 
+    const cat = r.categories;
+    const categoryName = Array.isArray(cat)
+      ? (cat[0]?.name ?? "")
+      : (cat?.name ?? "");
+
     return {
       id: r.id,
       title: r.title,
-      category: r.category,
+      categoryId: r.category_id ?? "",
+      categoryName,
       amount: num(r.amount),
       currency: r.currency as Currency,
       accountName,
@@ -312,18 +346,41 @@ export async function fetchTransactionsForStats(
 > {
   const { data, error } = await sb
     .from("transactions")
-    .select("amount,currency,category,occurred_on")
+    .select(`
+      amount,
+      currency,
+      occurred_on,
+      categories ( name )
+    `)
     .gte("occurred_on", from)
     .lte("occurred_on", to);
 
   if (error) throw error;
 
-  return (data ?? []).map((r) => ({
-    amount: num(r.amount),
-    currency: r.currency as Currency,
-    category: r.category as string,
-    occurred_on: (r.occurred_on as string).slice(0, 10),
-  }));
+  type Row = {
+    amount: unknown;
+    currency: string;
+    occurred_on: string;
+    categories:
+      | { name: string }
+      | { name: string }[]
+      | null;
+  };
+
+  return (data ?? []).map((r) => {
+    const row = r as unknown as Row;
+    const cat = row.categories;
+    const categoryName = Array.isArray(cat)
+      ? (cat[0]?.name ?? "")
+      : (cat?.name ?? "");
+
+    return {
+      amount: num(row.amount),
+      currency: row.currency as Currency,
+      category: categoryName,
+      occurred_on: (row.occurred_on as string).slice(0, 10),
+    };
+  });
 }
 
 export function spendJpyOnDate(
@@ -403,7 +460,7 @@ export async function insertTransactionAndUpdateBalance(
   sb: SupabaseClient,
   params: {
     accountId: string;
-    category: string;
+    categoryId: string;
     title: string;
     amount: number;
     currency: Currency;
@@ -426,7 +483,7 @@ export async function insertTransactionAndUpdateBalance(
   const row: Record<string, unknown> = {
     user_id: userId,
     account_id: params.accountId,
-    category: params.category,
+    category_id: params.categoryId,
     title: params.title,
     amount: params.amount,
     currency: params.currency,
@@ -451,7 +508,7 @@ export async function updateTransaction(
   transactionId: string,
   params: {
     accountId: string;
-    category: string;
+    categoryId: string;
     title: string;
     amount: number;
     currency: Currency;
@@ -523,7 +580,7 @@ export async function updateTransaction(
 
   // 更新交易记录
   const row: Record<string, unknown> = {
-    category: params.category,
+    category_id: params.categoryId,
     title: params.title,
     amount: params.amount,
     currency: params.currency,

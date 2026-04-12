@@ -11,9 +11,11 @@ import {
 import {
   deleteBudget,
   fetchBudgets,
+  fetchCategories,
   insertBudget,
   updateBudget,
   type BudgetRow,
+  type CategoryRow,
 } from "@/lib/ledger-data";
 
 export function BudgetSettingsView() {
@@ -101,7 +103,7 @@ export function BudgetSettingsView() {
                   className="flex items-center justify-between gap-2 px-4 py-3.5"
                 >
                   <div>
-                    <p className="font-medium">{b.category}</p>
+                    <p className="font-medium">{b.categoryName}</p>
                     <p className="text-xs text-stone-500 dark:text-stone-400">
                       额度 {b.limit.toLocaleString()} {b.currency}
                     </p>
@@ -121,7 +123,7 @@ export function BudgetSettingsView() {
                     <button
                       type="button"
                       onClick={async () => {
-                        if (!window.confirm(`删除「${b.category}」预算？`))
+                        if (!window.confirm(`删除「${b.categoryName}」预算？`))
                           return;
                         const sb = createBrowserSupabaseClient();
                         if (!sb) return;
@@ -171,29 +173,44 @@ function BudgetEditModal({
   onSaved: () => void;
 }) {
   const titleId = useId();
-  const [category, setCategory] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [limitStr, setLimitStr] = useState("");
   const [currency, setCurrency] = useState<Currency>("JPY");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 加载分类列表
+  const loadCategories = useCallback(async () => {
+    const sb = createBrowserSupabaseClient();
+    if (!sb) return;
+    try {
+      const cats = await fetchCategories(sb);
+      // 只显示支出分类
+      setCategories(cats.filter((c) => c.type === "expense"));
+    } catch (e) {
+      console.error("Failed to load categories:", e);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    void loadCategories();
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [open]);
+  }, [open, loadCategories]);
 
   useEffect(() => {
     if (!open) return;
     if (editing) {
-      setCategory(editing.category);
+      setCategoryId(editing.categoryId);
       setLimitStr(String(editing.limit));
       setCurrency(editing.currency);
     } else {
-      setCategory("");
+      setCategoryId("");
       setLimitStr("");
       setCurrency("JPY");
     }
@@ -238,9 +255,8 @@ function BudgetEditModal({
             onSubmit={async (e) => {
               e.preventDefault();
               setError(null);
-              const cat = category.trim();
-              if (!cat) {
-                setError("请填写分类名称");
+              if (!categoryId) {
+                setError("请选择分类");
                 return;
               }
               const lim = Number(limitStr);
@@ -252,13 +268,13 @@ function BudgetEditModal({
               try {
                 if (editing) {
                   await updateBudget(sb, editing.id, {
-                    category: cat,
+                    categoryId,
                     limit: lim,
                     currency,
                   });
                 } else {
                   await insertBudget(sb, {
-                    category: cat,
+                    categoryId,
                     limit: lim,
                     currency,
                   });
@@ -277,14 +293,20 @@ function BudgetEditModal({
           >
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
-                分类名称
+                分类
               </span>
-              <input
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                placeholder="例如：餐饮"
+              <select
+                value={categoryId}
+                onChange={(e) => setCategoryId(e.target.value)}
                 className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-base outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
-              />
+              >
+                <option value="">选择分类…</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
             </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="block">

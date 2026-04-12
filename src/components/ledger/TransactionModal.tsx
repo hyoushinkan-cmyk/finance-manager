@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { X } from "lucide-react";
 import { mockCategories, mockIncomeCategories } from "@/lib/mock-data";
@@ -13,6 +13,7 @@ import {
   updateTransaction,
 } from "@/lib/ledger-data";
 import type { AccountRow, TransactionListItem } from "@/lib/ledger-data";
+import { useCategories } from "@/contexts/CategoriesContext";
 
 type Props = {
   open: boolean;
@@ -40,12 +41,15 @@ export function TransactionModal({
   const titleId = useId();
   const [flowKind, setFlowKind] = useState<"expense" | "income">("expense");
   const [amountStr, setAmountStr] = useState("");
-  const [category, setCategory] = useState(mockCategories[0] ?? "其他");
+  const [categoryId, setCategoryId] = useState("");
   const [accountId, setAccountId] = useState("");
   const [occurredOn, setOccurredOn] = useState(() => toYmdLocal(new Date()));
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 使用 Context 获取分类数据
+  const { categories, loading: loadingCategories } = useCategories();
 
   // 当弹窗打开或交易数据变化时，初始化表单
   useEffect(() => {
@@ -65,7 +69,7 @@ export function TransactionModal({
       const isExpense = transaction.amount < 0;
       setFlowKind(isExpense ? "expense" : "income");
       setAmountStr(Math.abs(transaction.amount).toString());
-      setCategory(transaction.category);
+      setCategoryId(transaction.categoryId);
       setOccurredOn(transaction.date);
       setNotes(transaction.notes ?? "");
       // 需要找到对应的账户ID
@@ -77,7 +81,7 @@ export function TransactionModal({
       // 新建模式
       setFlowKind("expense");
       setAmountStr("");
-      setCategory(mockCategories[0] ?? "其他");
+      setCategoryId("");
       setAccountId(accounts[0]?.id ?? "");
       setOccurredOn(toYmdLocal(new Date()));
       setNotes("");
@@ -85,26 +89,41 @@ export function TransactionModal({
     setError(null);
   }, [open, transaction, accounts]);
 
+  // 当flowKind变化时，重置分类选择
   useEffect(() => {
-    if (flowKind === "expense") {
-      setCategory((c) =>
-        mockCategories.includes(c) ? c : (mockCategories[0] ?? "其他"),
-      );
-    } else {
-      const incomeCats = [...mockIncomeCategories];
-      setCategory((c) =>
-        incomeCats.includes(c as (typeof mockIncomeCategories)[number])
-          ? c
-          : incomeCats[0]!,
-      );
+    if (!isEditMode && categories.length > 0) {
+      const filteredCats = categories.filter((c) => c.type === flowKind);
+      if (filteredCats.length > 0 && !filteredCats.find((c) => c.id === categoryId)) {
+        setCategoryId(filteredCats[0]!.id);
+      }
     }
-  }, [flowKind]);
+  }, [flowKind, categories, categoryId, isEditMode]);
+
+  // 根据flowKind过滤分类选项
+  const categoryOptions = useMemo(() => {
+    if (isSupabaseConfigured()) {
+      return categories.filter((c) => c.type === flowKind);
+    }
+    // Mock数据模式
+    return (flowKind === "expense" ? mockCategories : mockIncomeCategories).map((name, i) => ({
+      id: `mock-${flowKind}-${i}`,
+      name,
+      type: flowKind,
+      sort_order: i,
+    }));
+  }, [flowKind, categories]);
+
+  // 获取当前选中的分类名称
+  const selectedCategoryName = useMemo(() => {
+    if (isSupabaseConfigured()) {
+      return categoryOptions.find((c) => c.id === categoryId)?.name ?? "";
+    }
+    return categoryId;
+  }, [categoryId, categoryOptions]);
 
   if (!open) return null;
 
   const selectedAccount = accounts.find((a) => a.id === accountId);
-  const categoryOptions =
-    flowKind === "expense" ? mockCategories : [...mockIncomeCategories];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -147,6 +166,8 @@ export function TransactionModal({
               去资产页添加账户
             </Link>
           </div>
+        ) : loadingCategories ? (
+          <div className="py-8 text-center text-stone-500">加载分类中…</div>
         ) : (
           <form
             className="space-y-4"
@@ -162,6 +183,10 @@ export function TransactionModal({
                 setError("请选择账户");
                 return;
               }
+              if (!categoryId) {
+                setError("请选择分类");
+                return;
+              }
               if (!/^\d{4}-\d{2}-\d{2}$/.test(occurredOn)) {
                 setError("日期格式无效");
                 return;
@@ -170,7 +195,6 @@ export function TransactionModal({
               const storedAmount =
                 flowKind === "expense" ? -Math.abs(raw) : Math.abs(raw);
               const currencySave = selectedAccount.currency;
-              const title = category;
               const notesTrim = notes.trim();
 
               if (!isSupabaseConfigured()) {
@@ -190,8 +214,8 @@ export function TransactionModal({
                   // 更新模式
                   await updateTransaction(sb, transaction.id, {
                     accountId: selectedAccount.id,
-                    category,
-                    title,
+                    categoryId,
+                    title: selectedCategoryName,
                     amount: storedAmount,
                     currency: currencySave,
                     occurredOn,
@@ -201,8 +225,8 @@ export function TransactionModal({
                   // 新建模式
                   await insertTransactionAndUpdateBalance(sb, {
                     accountId: selectedAccount.id,
-                    category,
-                    title,
+                    categoryId,
+                    title: selectedCategoryName,
                     amount: storedAmount,
                     currency: currencySave,
                     occurredOn,
@@ -280,13 +304,14 @@ export function TransactionModal({
                 分类
               </span>
               <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                value={categoryId}
+                onChange={(e) => setCategoryId(e.target.value)}
                 className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
               >
+                <option value="">选择分类…</option>
                 {categoryOptions.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
+                  <option key={c.id} value={c.id}>
+                    {c.name}
                   </option>
                 ))}
               </select>

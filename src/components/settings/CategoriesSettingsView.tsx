@@ -1,129 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { mockCategories, mockIncomeCategories } from "@/lib/mock-data";
-import {
-  createBrowserSupabaseClient,
-  isSupabaseConfigured,
-} from "@/lib/supabase/client";
-import {
-  fetchCategories,
-  insertCategory,
-  updateCategory,
-  deleteCategory,
-  type CategoryRow,
-} from "@/lib/ledger-data";
+import { useState } from "react";
+import { isSupabaseConfigured } from "@/lib/supabase/client";
+import type { CategoryRow } from "@/lib/ledger-data";
+import { useCategories } from "@/contexts/CategoriesContext";
 
 type Props = {
   onBack?: () => void;
 };
 
-type SupabaseError = {
-  message: string;
-  details?: string;
-  hint?: string;
-  code?: string;
-};
-
-// Helper function to extract error message from Supabase errors
-// Supabase errors may have non-enumerable properties, so we need to use getOwnPropertyDescriptors
-function extractErrorInfo(error: unknown): { message: string; details?: string; hint?: string; code?: string } {
-  if (!error || typeof error !== "object") {
-    return { message: String(error) };
-  }
-
-  const obj = error as Record<string, unknown>;
-  const descriptors = Object.getOwnPropertyDescriptors(obj);
-  const properties: Record<string, unknown> = {};
-
-  // Get all own properties including non-enumerable ones
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (descriptor.value !== undefined) {
-      properties[key] = descriptor.value;
-    }
-  }
-
-  return {
-    message: (properties.message as string) || (properties.msg as string) || String(error),
-    details: properties.details as string | undefined,
-    hint: properties.hint as string | undefined,
-    code: properties.code as string | undefined,
-  };
-}
-
-// Helper function to log error with full details
-function logSupabaseError(context: string, error: unknown) {
-  const errorInfo = extractErrorInfo(error);
-  console.error(`[Supabase Error - ${context}]`, errorInfo.message);
-  if (errorInfo.details) console.error(`  Details: ${errorInfo.details}`);
-  if (errorInfo.hint) console.error(`  Hint: ${errorInfo.hint}`);
-  if (errorInfo.code) console.error(`  Code: ${errorInfo.code}`);
-}
-
 export function CategoriesSettingsView({ onBack }: Props) {
-  const [categories, setCategories] = useState<CategoryRow[]>([]);
-  const [loading, setLoading] = useState(isSupabaseConfigured());
+  const { categories, loading, error, addCategory, editCategory, removeCategory } = useCategories();
   const [newExpenseName, setNewExpenseName] = useState("");
   const [newIncomeName, setNewIncomeName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadMockCategories = () => {
-    const expenseCats = mockCategories.map((name, i) => ({
-      id: `mock-expense-${i}`,
-      name,
-      type: "expense" as const,
-      sort_order: i,
-    }));
-    const incomeCats = mockIncomeCategories.map((name, i) => ({
-      id: `mock-income-${i}`,
-      name,
-      type: "income" as const,
-      sort_order: i,
-    }));
-    return [...expenseCats, ...incomeCats];
-  };
-
-  const refresh = useCallback(async () => {
-    if (!isSupabaseConfigured()) {
-      // 使用 mock 数据
-      setCategories(loadMockCategories());
-      setLoading(false);
-      return;
-    }
-
-    const sb = createBrowserSupabaseClient();
-    if (!sb) {
-      setCategories(loadMockCategories());
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const cats = await fetchCategories(sb);
-      setCategories(cats);
-    } catch (e) {
-      logSupabaseError("fetchCategories", e);
-
-      // Check if it's an empty error object
-      const isEmptyObject = e && typeof e === "object" && Object.keys(e).length === 0;
-      if (isEmptyObject) {
-        console.warn("[Supabase] Falling back to mock data");
-        setCategories(loadMockCategories());
-      } else {
-        const errorInfo = extractErrorInfo(e);
-        setError(errorInfo.message || "获取分类失败");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const expenseCategories = categories.filter((c) => c.type === "expense");
   const incomeCategories = categories.filter((c) => c.type === "income");
@@ -131,25 +24,13 @@ export function CategoriesSettingsView({ onBack }: Props) {
   const handleAddExpense = async () => {
     const name = newExpenseName.trim();
     if (!name) return;
-    setError(null);
-
-    if (!isSupabaseConfigured()) {
-      setNewExpenseName("");
-      return;
-    }
-
-    const sb = createBrowserSupabaseClient();
-    if (!sb) return;
-
+    setLocalError(null);
     setSaving(true);
     try {
-      await insertCategory(sb, { name, type: "expense" });
+      await addCategory(name, "expense");
       setNewExpenseName("");
-      await refresh();
     } catch (e) {
-      logSupabaseError("insertCategory (expense)", e);
-      const errorInfo = extractErrorInfo(e);
-      setError(errorInfo.message || "添加失败");
+      setLocalError(String(e) || "添加失败");
     } finally {
       setSaving(false);
     }
@@ -158,25 +39,13 @@ export function CategoriesSettingsView({ onBack }: Props) {
   const handleAddIncome = async () => {
     const name = newIncomeName.trim();
     if (!name) return;
-    setError(null);
-
-    if (!isSupabaseConfigured()) {
-      setNewIncomeName("");
-      return;
-    }
-
-    const sb = createBrowserSupabaseClient();
-    if (!sb) return;
-
+    setLocalError(null);
     setSaving(true);
     try {
-      await insertCategory(sb, { name, type: "income" });
+      await addCategory(name, "income");
       setNewIncomeName("");
-      await refresh();
     } catch (e) {
-      logSupabaseError("insertCategory (income)", e);
-      const errorInfo = extractErrorInfo(e);
-      setError(errorInfo.message || "添加失败");
+      setLocalError(String(e) || "添加失败");
     } finally {
       setSaving(false);
     }
@@ -189,25 +58,13 @@ export function CategoriesSettingsView({ onBack }: Props) {
 
   const handleSaveEdit = async () => {
     if (!editingId || !editName.trim()) return;
-    setError(null);
-
-    if (!isSupabaseConfigured()) {
-      setEditingId(null);
-      return;
-    }
-
-    const sb = createBrowserSupabaseClient();
-    if (!sb) return;
-
+    setLocalError(null);
     setSaving(true);
     try {
-      await updateCategory(sb, editingId, { name: editName.trim() });
+      await editCategory(editingId, editName.trim());
       setEditingId(null);
-      await refresh();
     } catch (e) {
-      logSupabaseError("updateCategory", e);
-      const errorInfo = extractErrorInfo(e);
-      setError(errorInfo.message || "保存失败");
+      setLocalError(String(e) || "保存失败");
     } finally {
       setSaving(false);
     }
@@ -215,26 +72,16 @@ export function CategoriesSettingsView({ onBack }: Props) {
 
   const handleDelete = async (id: string) => {
     if (!confirm("确定要删除这个分类吗？")) return;
-    setError(null);
-
-    if (!isSupabaseConfigured()) {
-      return;
-    }
-
-    const sb = createBrowserSupabaseClient();
-    if (!sb) return;
-
+    setLocalError(null);
     try {
-      await deleteCategory(sb, id);
-      await refresh();
+      await removeCategory(id);
     } catch (e) {
-      logSupabaseError("deleteCategory", e);
-      const errorInfo = extractErrorInfo(e);
-      setError(errorInfo.message || "删除失败");
+      setLocalError(String(e) || "删除失败");
     }
   };
 
   const isMockData = !isSupabaseConfigured();
+  const displayError = localError || error;
 
   return (
     <div className="pb-4">
@@ -258,9 +105,9 @@ export function CategoriesSettingsView({ onBack }: Props) {
         </div>
       </header>
 
-      {error && (
+      {displayError && (
         <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-600 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">
-          {error}
+          {displayError}
         </p>
       )}
 

@@ -17,6 +17,7 @@ import {
   type TransactionListItem,
 } from "@/lib/ledger-data";
 import { TransactionModal } from "./TransactionModal";
+import { useTransactions } from "@/contexts/TransactionsContext";
 
 function formatMoney(amount: number, currency: string) {
   const sign = amount < 0 ? "-" : "+";
@@ -43,6 +44,9 @@ export function LedgerHome() {
   const [loading, setLoading] = useState(isSupabaseConfigured());
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // 使用 Context 通知其他页面刷新
+  const { triggerRefresh } = useTransactions();
+
   const refresh = useCallback(async () => {
     const sb = createBrowserSupabaseClient();
     if (!sb) {
@@ -50,7 +54,8 @@ export function LedgerHome() {
         mockTransactions.map((t) => ({
           id: t.id,
           title: t.title,
-          category: t.category,
+          categoryId: "",
+          categoryName: t.category,
           amount: t.amount,
           currency: t.currency,
           accountName: t.accountName,
@@ -134,6 +139,7 @@ export function LedgerHome() {
     try {
       await deleteTransaction(sb, transaction.id);
       void refresh();
+      triggerRefresh(); // 通知统计页面刷新
     } catch (err) {
       console.error("删除失败:", err);
       alert("删除失败，请稍后重试");
@@ -205,7 +211,7 @@ export function LedgerHome() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{t.title}</p>
                   <p className="truncate text-xs text-stone-500 dark:text-stone-400">
-                    {t.category} · {t.accountName} · {t.date}
+                    {t.categoryName} · {t.accountName} · {t.date}
                   </p>
                   {t.notes ? (
                     <p className="mt-0.5 line-clamp-2 text-xs text-stone-400 dark:text-stone-500">
@@ -263,7 +269,10 @@ export function LedgerHome() {
         accounts={accounts}
         transaction={editingTransaction}
         onClose={handleModalClose}
-        onSaved={() => void refresh()}
+        onSaved={() => {
+          void refresh();
+          triggerRefresh(); // 通知统计页面刷新
+        }}
       />
     </>
   );

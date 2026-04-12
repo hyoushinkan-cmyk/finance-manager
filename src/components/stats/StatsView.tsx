@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Currency } from "@/lib/mock-data";
 import {
   createBrowserSupabaseClient,
@@ -11,6 +11,7 @@ import {
   fetchTransactionsForStats,
   monthTotalsJpy,
 } from "@/lib/ledger-data";
+import { useTransactions } from "@/contexts/TransactionsContext";
 
 type TxAgg = {
   amount: number;
@@ -75,21 +76,12 @@ function buildCategoryShare(
   const total = [...map.values()].reduce((a, b) => a + b, 0);
   if (total <= 0) return [];
   const entries = [...map.entries()].sort((a, b) => b[1] - a[1]);
-  const top = entries.slice(0, 4);
-  const rest = entries.slice(4).reduce((s, [, v]) => s + v, 0);
-  const rows = top.map(([name, amount]) => ({
+  // 显示所有分类，不进行汇总
+  return entries.map(([name, amount]) => ({
     name,
     pct: Math.round((amount / total) * 100),
     amount: Math.round(amount),
   }));
-  if (rest > 0) {
-    rows.push({
-      name: "其他",
-      pct: Math.round((rest / total) * 100),
-      amount: Math.round(rest),
-    });
-  }
-  return rows;
 }
 
 export function StatsView() {
@@ -99,7 +91,11 @@ export function StatsView() {
   const [trend, setTrend] = useState(DEMO_TREND);
   const [subtitle, setSubtitle] = useState("本月概览（演示数据）");
 
-  useEffect(() => {
+  // 订阅 Context 的刷新触发器
+  const { refresh } = useTransactions();
+
+  // 加载数据的函数
+  const loadData = useCallback(() => {
     if (!isSupabaseConfigured()) {
       setSubtitle("本月概览（演示数据）");
       return;
@@ -140,6 +136,11 @@ export function StatsView() {
       }
     })();
   }, []);
+
+  // 初始加载 + 响应 Context 刷新
+  useEffect(() => {
+    void loadData();
+  }, [loadData, refresh]);
 
   const maxBar = Math.max(
     ...trend.map((t) => Math.max(t.income, t.expense)),
