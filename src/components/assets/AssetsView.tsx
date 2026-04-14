@@ -55,9 +55,18 @@ export function AssetsView() {
   const [loading, setLoading] = useState(isSupabaseConfigured());
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<AccountRow | null>(null);
-  const [jpyPerCny, setJpyPerCny] = useState(getJpyPerCny);
+  // Use lazy initializer to ensure SSR and client use the same initial value (21)
+  // After hydration, useEffect updates to localStorage value (e.g., 23)
+  const [jpyPerCny, setJpyPerCny] = useState(() => getJpyPerCny());
+  const [hydrated, setHydrated] = useState(false);
 
   const supabaseLive = isSupabaseConfigured();
+
+  useEffect(() => {
+    // Update to localStorage value after hydration
+    setJpyPerCny(getJpyPerCny());
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     const onFx = () => setJpyPerCny(getJpyPerCny());
@@ -98,6 +107,7 @@ export function AssetsView() {
     }
 
     setLoading(true);
+    console.log("[UI DEBUG] refresh: 开始加载...");
     try {
       const { y, m, from, to } = monthRangeYmd();
       const [accs, buds, txRows] = await Promise.all([
@@ -105,6 +115,7 @@ export function AssetsView() {
         fetchBudgets(sb),
         fetchTransactionsForStats(sb, from, to),
       ]);
+      console.log("[UI DEBUG] refresh: 数据获取完成", { accs: accs.length, buds: buds.length, txRows: txRows.length });
       setAccounts(accs);
       setBudgetLimits(buds);
       const items = txRows.map((r) => ({
@@ -178,9 +189,11 @@ export function AssetsView() {
             ))}
           </div>
         </div>
-        <p className="mt-2 text-[11px] text-stone-400">
-          当前汇率为 1 CNY = {jpyPerCny} JPY（可在「设置 → 汇率设置」中修改）
-        </p>
+        {hydrated && (
+          <p className="mt-2 text-[11px] text-stone-400">
+            当前汇率为 1 CNY = {jpyPerCny} JPY（可在「设置 → 汇率设置」中修改）
+          </p>
+        )}
       </section>
 
       <section className="mb-8">

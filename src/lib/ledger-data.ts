@@ -56,12 +56,17 @@ async function requireUserId(sb: SupabaseClient): Promise<string> {
 export async function fetchAccounts(
   sb: SupabaseClient,
 ): Promise<AccountRow[]> {
+  console.log("[DEBUG] fetchAccounts: 开始查询...");
   const { data, error } = await sb
     .from("accounts")
     .select("id,name,type,currency,balance,principal,profit")
     .order("name", { ascending: true });
 
-  if (error) throw error;
+  console.log("[DEBUG] fetchAccounts 结果:", { data, error });
+  if (error) {
+    console.error("[DEBUG] fetchAccounts error:", error);
+    throw error;
+  }
   return (data ?? []).map((r) => ({
     id: r.id as string,
     name: r.name as string,
@@ -143,7 +148,7 @@ export async function fetchBudgets(sb: SupabaseClient): Promise<BudgetRow[]> {
       currency,
       categories ( name )
     `)
-    .order("created_at", { ascending: true });
+    .order("id", { ascending: true });
 
   if (error) throw error;
 
@@ -284,7 +289,7 @@ export async function fetchTransactions(
     `,
     )
     .order("occurred_on", { ascending: false })
-    .order("created_at", { ascending: false });
+    .order("id", { ascending: false });
 
   if (error) throw error;
 
@@ -483,7 +488,7 @@ export async function insertTransactionAndUpdateBalance(
   const row: Record<string, unknown> = {
     user_id: userId,
     account_id: params.accountId,
-    category_id: params.categoryId,
+    category: params.categoryId,
     title: params.title,
     amount: params.amount,
     currency: params.currency,
@@ -580,7 +585,7 @@ export async function updateTransaction(
 
   // 更新交易记录
   const row: Record<string, unknown> = {
-    category_id: params.categoryId,
+    category: params.categoryId,
     title: params.title,
     amount: params.amount,
     currency: params.currency,
