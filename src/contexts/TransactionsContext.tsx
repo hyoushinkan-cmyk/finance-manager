@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -16,6 +17,7 @@ import {
   fetchTransactions,
   type TransactionListItem,
 } from "@/lib/ledger-data";
+import { applyMonthlyRecurringRules } from "@/lib/recurring";
 
 type TransactionsContextValue = {
   transactions: TransactionListItem[];
@@ -67,6 +69,22 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
   // 触发刷新的函数 - 当其他页面修改了数据时调用
   const triggerRefresh = useCallback(() => {
     setRefreshTrigger((prev) => prev + 1);
+  }, []);
+
+  // 初始加载时：执行循环记账自动入账（只在首次挂载时执行一次）
+  const recurringRan = useRef(false);
+  useEffect(() => {
+    if (recurringRan.current) return;
+    recurringRan.current = true;
+    if (!isSupabaseConfigured()) return;
+    const sb = createBrowserSupabaseClient();
+    if (!sb) return;
+
+    void applyMonthlyRecurringRules(sb).then((applied) => {
+      if (applied > 0) {
+        console.log(`[recurring] 自动入账 ${applied} 条循环记录`);
+      }
+    });
   }, []);
 
   // 初始加载 + 响应 refreshTrigger 变化

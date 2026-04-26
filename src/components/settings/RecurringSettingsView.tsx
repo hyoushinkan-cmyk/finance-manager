@@ -4,49 +4,39 @@ import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import { ArrowLeft, Plus, Trash2, X } from "lucide-react";
 import type { Currency } from "@/lib/mock-data";
+import {
+  createBrowserSupabaseClient,
+  isSupabaseConfigured,
+} from "@/lib/supabase/client";
+import { fetchAccounts, fetchCategories, type AccountRow, type CategoryRow } from "@/lib/ledger-data";
+import {
+  loadRecurringRules,
+  saveRecurringRules,
+  type RecurringRule,
+} from "@/lib/recurring";
 
-const STORAGE_KEY = "finance_app_recurring_rules";
-
-export type RecurringRule = {
-  id: string;
-  title: string;
-  amount: number;
-  currency: Currency;
-  kind: "expense" | "income";
-  frequency: "monthly" | "weekly";
-  note: string;
-};
-
-function loadRules(): RecurringRule[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (r): r is RecurringRule =>
-        typeof r === "object" &&
-        r !== null &&
-        "id" in r &&
-        "title" in r &&
-        typeof (r as RecurringRule).title === "string",
-    );
-  } catch {
-    return [];
-  }
-}
-
-function saveRules(rules: RecurringRule[]) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(rules));
-}
+export type { RecurringRule };
 
 export function RecurringSettingsView() {
   const [rules, setRules] = useState<RecurringRule[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
 
   useEffect(() => {
-    setRules(loadRules());
+    setRules(loadRecurringRules());
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    const sb = createBrowserSupabaseClient();
+    if (!sb) return;
+    void Promise.all([fetchAccounts(sb), fetchCategories(sb)]).then(
+      ([accs, cats]) => {
+        setAccounts(accs);
+        setCategories(cats);
+      },
+    );
   }, []);
 
   return (
@@ -61,7 +51,7 @@ export function RecurringSettingsView() {
         </Link>
         <h1 className="text-2xl font-bold tracking-tight">循环记账</h1>
         <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
-          记录房租、订阅等周期性收支备忘（保存在本机；不会自动入账，记一笔仍需手动确认）
+          设置后每月月底自动入账（下次打开 App 时执行）
         </p>
       </header>
 
@@ -79,7 +69,7 @@ export function RecurringSettingsView() {
       <ul className="space-y-3">
         {rules.length === 0 ? (
           <li className="rounded-2xl border border-stone-200 bg-white px-4 py-8 text-center text-sm text-stone-500 dark:border-neutral-800 dark:bg-neutral-900">
-            暂无规则。后续若接入服务端定时任务，可在此基础上自动生成账单。
+            暂无规则。添加后每月月底将自动入账。
           </li>
         ) : (
           rules.map((r) => (
@@ -92,7 +82,11 @@ export function RecurringSettingsView() {
                 <p className="mt-0.5 text-sm tabular-nums text-stone-600 dark:text-stone-300">
                   {r.kind === "expense" ? "支出" : "收入"}{" "}
                   {Math.abs(r.amount).toLocaleString()} {r.currency} ·{" "}
-                  {r.frequency === "monthly" ? "每月" : "每周"}
+                  {r.frequency === "monthly" ? "每月月底" : "每周"}
+                </p>
+                <p className="mt-0.5 text-xs text-stone-400 dark:text-stone-500">
+                  {r.categoryName && <span>{r.categoryName} · </span>}
+                  {r.accountName && <span>{r.accountName}</span>}
                 </p>
                 {r.note ? (
                   <p className="mt-1 text-xs text-stone-400">{r.note}</p>
@@ -103,7 +97,7 @@ export function RecurringSettingsView() {
                 onClick={() => {
                   const next = rules.filter((x) => x.id !== r.id);
                   setRules(next);
-                  saveRules(next);
+                  saveRecurringRules(next);
                 }}
                 className="rounded-lg p-2 text-stone-500 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40"
                 aria-label="删除"
@@ -117,11 +111,13 @@ export function RecurringSettingsView() {
 
       <RecurringAddModal
         open={modalOpen}
+        accounts={accounts}
+        categories={categories}
         onClose={() => setModalOpen(false)}
         onAdd={(rule) => {
           const next = [...rules, rule];
           setRules(next);
-          saveRules(next);
+          saveRecurringRules(next);
           setModalOpen(false);
         }}
       />
@@ -131,10 +127,14 @@ export function RecurringSettingsView() {
 
 function RecurringAddModal({
   open,
+  accounts,
+  categories,
   onClose,
   onAdd,
 }: {
   open: boolean;
+  accounts: AccountRow[];
+  categories: CategoryRow[];
   onClose: () => void;
   onAdd: (r: RecurringRule) => void;
 }) {
@@ -145,6 +145,11 @@ function RecurringAddModal({
   const [kind, setKind] = useState<"expense" | "income">("expense");
   const [frequency, setFrequency] = useState<"monthly" | "weekly">("monthly");
   const [note, setNote] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+
+  // 根据 kind 过滤分类
+  const filteredCategories = categories.filter((c) => c.type === kind);
 
   useEffect(() => {
     if (!open) return;
@@ -163,9 +168,24 @@ function RecurringAddModal({
     setKind("expense");
     setFrequency("monthly");
     setNote("");
-  }, [open]);
+    setAccountId(accounts[0]?.id ?? "");
+    setCategoryId("");
+  }, [open, accounts]);
+
+  // kind 变化时重置分类
+  useEffect(() => {
+    const cats = categories.filter((c) => c.type === kind);
+    if (cats.length > 0) {
+      setCategoryId(cats[0]!.id);
+    } else {
+      setCategoryId("");
+    }
+  }, [kind, categories]);
 
   if (!open) return null;
+
+  const selectedAccount = accounts.find((a) => a.id === accountId);
+  const selectedCategory = categories.find((c) => c.id === categoryId);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -183,7 +203,7 @@ function RecurringAddModal({
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 id={titleId} className="text-lg font-semibold tracking-tight">
-            添加循环备忘
+            添加循环规则
           </h2>
           <button
             type="button"
@@ -203,6 +223,7 @@ function RecurringAddModal({
             if (!t) return;
             const amt = Number(amountStr);
             if (!Number.isFinite(amt) || amt <= 0) return;
+            if (!accountId || !categoryId) return;
             const signed = kind === "expense" ? -Math.abs(amt) : Math.abs(amt);
             onAdd({
               id:
@@ -215,6 +236,10 @@ function RecurringAddModal({
               kind,
               frequency,
               note: note.trim(),
+              accountId,
+              accountName: selectedAccount?.name ?? "",
+              categoryId,
+              categoryName: selectedCategory?.name ?? "",
             });
           }}
         >
@@ -226,9 +251,11 @@ function RecurringAddModal({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="例如：房租"
+              required
               className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
             />
           </label>
+
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-stone-600 dark:text-stone-400">
@@ -238,6 +265,7 @@ function RecurringAddModal({
                 type="number"
                 min="0"
                 step="any"
+                required
                 value={amountStr}
                 onChange={(e) => setAmountStr(e.target.value)}
                 className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm tabular-nums outline-none dark:border-neutral-700 dark:bg-neutral-950"
@@ -257,6 +285,7 @@ function RecurringAddModal({
               </select>
             </label>
           </div>
+
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-stone-600 dark:text-stone-400">
@@ -284,14 +313,53 @@ function RecurringAddModal({
                 }
                 className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
               >
-                <option value="monthly">每月</option>
+                <option value="monthly">每月月底</option>
                 <option value="weekly">每周</option>
               </select>
             </label>
           </div>
+
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-stone-600 dark:text-stone-400">
-              备注
+              分类
+            </span>
+            <select
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+              required
+              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+            >
+              <option value="">选择分类…</option>
+              {filteredCategories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-stone-600 dark:text-stone-400">
+              账户
+            </span>
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              required
+              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+            >
+              <option value="">选择账户…</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}（{a.currency}）
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-stone-600 dark:text-stone-400">
+              备注（可选）
             </span>
             <input
               value={note}
@@ -299,6 +367,7 @@ function RecurringAddModal({
               className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
             />
           </label>
+
           <button
             type="submit"
             className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"

@@ -12,16 +12,24 @@ export type AccountRow = {
   profit: number | null;
 };
 
+export type TransactionType = "expense" | "income" | "transfer";
+
 export type TransactionListItem = {
   id: string;
   title: string;
-  categoryId: string;
+  type: TransactionType;
+  categoryId: string | null;
   categoryName: string;
   amount: number;
   currency: Currency;
   accountName: string;
+  accountId: string;
   date: string;
   notes: string | null;
+  fromAccountId?: string | null;
+  fromAccountName?: string | null;
+  toAccountId?: string | null;
+  toAccountName?: string | null;
 };
 
 export type BudgetRow = {
@@ -279,45 +287,70 @@ export async function fetchTransactions(
       `
       id,
       title,
+      type,
       category_id,
       amount,
       currency,
       occurred_on,
       notes,
-      accounts ( name ),
-      categories ( name )
+      account_id,
+      categories ( name ),
+      from_account_id,
+      to_account_id
     `,
     )
     .order("occurred_on", { ascending: false })
     .order("id", { ascending: false });
 
+  console.log("[DEBUG FETCH] data:", data, "error:", error);
+  
   if (error) throw error;
 
   type Row = {
     id: string;
     title: string;
+    type: string;
     category_id: string | null;
     amount: unknown;
     currency: string;
     occurred_on: string;
     notes: string | null;
-    accounts:
-      | { name: string }
-      | { name: string }[]
-      | null;
+    account_id: string;
     categories:
       | { name: string }
       | { name: string }[]
       | null;
+    from_account_id: string | null;
+    to_account_id: string | null;
   };
 
   const rows = (data ?? []) as Row[];
-  return rows.map((r) => {
-    const acc = r.accounts;
-    const accountName = Array.isArray(acc)
-      ? (acc[0]?.name ?? "")
-      : (acc?.name ?? "");
+  
+  // 批量获取所有相关的账户名称
+  const allAccountIds = new Set<string>();
+  rows.forEach((r) => {
+    if (r.account_id) allAccountIds.add(r.account_id);
+    if (r.from_account_id) allAccountIds.add(r.from_account_id);
+    if (r.to_account_id) allAccountIds.add(r.to_account_id);
+  });
+  
+  // 查询所有需要的账户
+  let accountNames: Record<string, string> = {};
+  if (allAccountIds.size > 0) {
+    const { data: accountsData, error: accErr } = await sb
+      .from("accounts")
+      .select("id, name")
+      .in("id", Array.from(allAccountIds));
+    
+    if (!accErr && accountsData) {
+      accountNames = {};
+      accountsData.forEach((acc: { id: string; name: string }) => {
+        accountNames[acc.id] = acc.name;
+      });
+    }
+  }
 
+  return rows.map((r) => {
     const cat = r.categories;
     const categoryName = Array.isArray(cat)
       ? (cat[0]?.name ?? "")
@@ -326,13 +359,19 @@ export async function fetchTransactions(
     return {
       id: r.id,
       title: r.title,
-      categoryId: r.category_id ?? "",
+      type: r.type as TransactionType,
+      categoryId: r.category_id ?? null,
       categoryName,
       amount: num(r.amount),
       currency: r.currency as Currency,
-      accountName,
+      accountName: accountNames[r.account_id] ?? "",
+      accountId: r.account_id,
       date: r.occurred_on.slice(0, 10),
       notes: r.notes ?? null,
+      fromAccountId: r.from_account_id,
+      fromAccountName: r.from_account_id ? accountNames[r.from_account_id] ?? null : null,
+      toAccountId: r.to_account_id,
+      toAccountName: r.to_account_id ? accountNames[r.to_account_id] ?? null : null,
     };
   });
 }
@@ -358,7 +397,8 @@ export async function fetchTransactionsForStats(
       categories ( name )
     `)
     .gte("occurred_on", from)
-    .lte("occurred_on", to);
+    .lte("occurred_on", to)
+    .neq("type", "transfer"); // 过滤掉转账记录
 
   if (error) throw error;
 
@@ -466,6 +506,7 @@ export async function insertTransactionAndUpdateBalance(
   params: {
     accountId: string;
     categoryId: string;
+    categoryName: string;
     title: string;
     amount: number;
     currency: Currency;
@@ -488,7 +529,8 @@ export async function insertTransactionAndUpdateBalance(
   const row: Record<string, unknown> = {
     user_id: userId,
     account_id: params.accountId,
-    category: params.categoryId,
+    category_id: params.categoryId,
+    category: params.categoryName,
     title: params.title,
     amount: params.amount,
     currency: params.currency,
@@ -498,7 +540,13 @@ export async function insertTransactionAndUpdateBalance(
     row.notes = params.notes.trim();
   }
 
-  const { error: insErr } = await sb.from("transactions").insert(row);
+  const { data: insertResult, error: insErr } = await sb
+    .from("transactions")
+    .insert(row)
+    .select("id, category_id, category");
+  
+  console.log("[DEBUG INSERT RESULT] data:", insertResult, "error:", insErr);
+  
   if (insErr) throw insErr;
 
   const { error: updErr } = await sb
@@ -514,6 +562,7 @@ export async function updateTransaction(
   params: {
     accountId: string;
     categoryId: string;
+    categoryName: string;
     title: string;
     amount: number;
     currency: Currency;
@@ -585,7 +634,8 @@ export async function updateTransaction(
 
   // 更新交易记录
   const row: Record<string, unknown> = {
-    category: params.categoryId,
+    category_id: params.categoryId,
+    category: params.categoryName,
     title: params.title,
     amount: params.amount,
     currency: params.currency,
@@ -613,7 +663,7 @@ export async function deleteTransaction(
   // 获取当前交易记录
   const { data: currentTx, error: fetchErr } = await sb
     .from("transactions")
-    .select("amount, account_id")
+    .select("amount, account_id, type, from_account_id, to_account_id")
     .eq("id", transactionId)
     .eq("user_id", userId)
     .single();
@@ -621,22 +671,64 @@ export async function deleteTransaction(
   if (fetchErr) throw fetchErr;
   if (!currentTx) throw new Error("Transaction not found");
 
+  const txType = currentTx.type as string;
   const txAmount = num(currentTx.amount);
   const txAccountId = currentTx.account_id as string;
 
-  // 回滚账户余额
-  const { data: account, error: accErr } = await sb
-    .from("accounts")
-    .select("balance")
-    .eq("id", txAccountId)
-    .single();
-  if (accErr) throw accErr;
+  // 处理转账类型的余额回滚
+  if (txType === "transfer") {
+    const fromAccountId = currentTx.from_account_id as string;
+    const toAccountId = currentTx.to_account_id as string;
 
-  const { error: updErr } = await sb
-    .from("accounts")
-    .update({ balance: num(account?.balance) - txAmount })
-    .eq("id", txAccountId);
-  if (updErr) throw updErr;
+    // 转账金额为正数存储，需要从 to 账户减去，from 账户加上
+    // 回滚：from 账户减少（取走），to 账户增加（归还）
+    // 但实际我们存的是 amount 正数，所以 from 账户要减去 amount，to 账户要减去 amount
+    // 等效于：from 账户 balance -= amount, to 账户 balance -= amount
+
+    // 获取 from 账户余额
+    const { data: fromAccount, error: fromAccErr } = await sb
+      .from("accounts")
+      .select("balance")
+      .eq("id", fromAccountId)
+      .single();
+    if (fromAccErr) throw fromAccErr;
+
+    // 获取 to 账户余额
+    const { data: toAccount, error: toAccErr } = await sb
+      .from("accounts")
+      .select("balance")
+      .eq("id", toAccountId)
+      .single();
+    if (toAccErr) throw toAccErr;
+
+    // 回滚 from 账户（转出账户）
+    const { error: fromUpdErr } = await sb
+      .from("accounts")
+      .update({ balance: num(fromAccount?.balance) - txAmount })
+      .eq("id", fromAccountId);
+    if (fromUpdErr) throw fromUpdErr;
+
+    // 回滚 to 账户（转入账户）
+    const { error: toUpdErr } = await sb
+      .from("accounts")
+      .update({ balance: num(toAccount?.balance) - txAmount })
+      .eq("id", toAccountId);
+    if (toUpdErr) throw toUpdErr;
+  } else {
+    // 普通交易回滚
+    const { data: account, error: accErr } = await sb
+      .from("accounts")
+      .select("balance")
+      .eq("id", txAccountId)
+      .single();
+    if (accErr) throw accErr;
+
+    const { error: updErr } = await sb
+      .from("accounts")
+      .update({ balance: num(account?.balance) - txAmount })
+      .eq("id", txAccountId);
+    if (updErr) throw updErr;
+  }
 
   // 删除交易记录
   const { error: delErr } = await sb
@@ -644,4 +736,84 @@ export async function deleteTransaction(
     .delete()
     .eq("id", transactionId);
   if (delErr) throw delErr;
+}
+
+/**
+ * 创建转账记录
+ * 从 fromAccount 转出 amount 到 toAccount
+ * 转账不影响总资产
+ */
+export async function insertTransfer(
+  sb: SupabaseClient,
+  params: {
+    fromAccountId: string;
+    toAccountId: string;
+    title: string;
+    amount: number;
+    currency: Currency;
+    occurredOn: string;
+    notes: string | null;
+  },
+): Promise<void> {
+  // 验证 from 和 to 不能相同
+  if (params.fromAccountId === params.toAccountId) {
+    throw new Error("转出账户和转入账户不能相同");
+  }
+
+  if (params.amount <= 0) {
+    throw new Error("转账金额必须大于零");
+  }
+
+  const userId = await requireUserId(sb);
+
+  // 获取 from 账户当前余额
+  const { data: fromAccount, error: fromAccErr } = await sb
+    .from("accounts")
+    .select("balance")
+    .eq("id", params.fromAccountId)
+    .single();
+  if (fromAccErr) throw fromAccErr;
+
+  // 获取 to 账户当前余额
+  const { data: toAccount, error: toAccErr } = await sb
+    .from("accounts")
+    .select("balance")
+    .eq("id", params.toAccountId)
+    .single();
+  if (toAccErr) throw toAccErr;
+
+  // 更新 from 账户余额（减少）
+  const { error: fromUpdErr } = await sb
+    .from("accounts")
+    .update({ balance: num(fromAccount?.balance) - params.amount })
+    .eq("id", params.fromAccountId);
+  if (fromUpdErr) throw fromUpdErr;
+
+  // 更新 to 账户余额（增加）
+  const { error: toUpdErr } = await sb
+    .from("accounts")
+    .update({ balance: num(toAccount?.balance) + params.amount })
+    .eq("id", params.toAccountId);
+  if (toUpdErr) throw toUpdErr;
+
+  // 创建转账记录
+  const row: Record<string, unknown> = {
+    user_id: userId,
+    type: "transfer",
+    account_id: params.fromAccountId, // 主要账户关联
+    from_account_id: params.fromAccountId,
+    to_account_id: params.toAccountId,
+    category_id: null, // 转账无分类
+    category: "转账",
+    title: params.title,
+    amount: params.amount, // 正数
+    currency: params.currency,
+    occurred_on: params.occurredOn,
+  };
+  if (params.notes != null && params.notes.trim() !== "") {
+    row.notes = params.notes.trim();
+  }
+
+  const { error: insErr } = await sb.from("transactions").insert(row);
+  if (insErr) throw insErr;
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { X } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import { mockCategories, mockIncomeCategories } from "@/lib/mock-data";
 import {
   createBrowserSupabaseClient,
@@ -10,9 +10,10 @@ import {
 } from "@/lib/supabase/client";
 import {
   insertTransactionAndUpdateBalance,
+  insertTransfer,
   updateTransaction,
 } from "@/lib/ledger-data";
-import type { AccountRow, TransactionListItem } from "@/lib/ledger-data";
+import type { AccountRow, TransactionListItem, TransactionType } from "@/lib/ledger-data";
 import { useCategories } from "@/contexts/CategoriesContext";
 
 type Props = {
@@ -39,10 +40,13 @@ export function TransactionModal({
 }: Props) {
   const isEditMode = !!transaction;
   const titleId = useId();
-  const [flowKind, setFlowKind] = useState<"expense" | "income">("expense");
+  const [flowKind, setFlowKind] = useState<TransactionType>("expense");
   const [amountStr, setAmountStr] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [accountId, setAccountId] = useState("");
+  // 转账专用字段
+  const [fromAccountId, setFromAccountId] = useState("");
+  const [toAccountId, setToAccountId] = useState("");
   const [occurredOn, setOccurredOn] = useState(() => toYmdLocal(new Date()));
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -69,7 +73,7 @@ export function TransactionModal({
       const isExpense = transaction.amount < 0;
       setFlowKind(isExpense ? "expense" : "income");
       setAmountStr(Math.abs(transaction.amount).toString());
-      setCategoryId(transaction.categoryId);
+      setCategoryId(transaction.categoryId ?? "");
       setOccurredOn(transaction.date);
       setNotes(transaction.notes ?? "");
       // 需要找到对应的账户ID
@@ -83,6 +87,8 @@ export function TransactionModal({
       setAmountStr("");
       setCategoryId("");
       setAccountId(accounts[0]?.id ?? "");
+      setFromAccountId(accounts[0]?.id ?? "");
+      setToAccountId(accounts.length > 1 ? accounts[1]?.id ?? "" : accounts[0]?.id ?? "");
       setOccurredOn(toYmdLocal(new Date()));
       setNotes("");
     }
@@ -179,22 +185,12 @@ export function TransactionModal({
                 setError("请输入大于零的金额");
                 return;
               }
-              if (!selectedAccount) {
-                setError("请选择账户");
-                return;
-              }
-              if (!categoryId) {
-                setError("请选择分类");
-                return;
-              }
+
               if (!/^\d{4}-\d{2}-\d{2}$/.test(occurredOn)) {
                 setError("日期格式无效");
                 return;
               }
 
-              const storedAmount =
-                flowKind === "expense" ? -Math.abs(raw) : Math.abs(raw);
-              const currencySave = selectedAccount.currency;
               const notesTrim = notes.trim();
 
               if (!isSupabaseConfigured()) {
@@ -210,28 +206,74 @@ export function TransactionModal({
 
               setSaving(true);
               try {
-                if (isEditMode && transaction) {
-                  // 更新模式
-                  await updateTransaction(sb, transaction.id, {
-                    accountId: selectedAccount.id,
-                    categoryId,
-                    title: selectedCategoryName,
-                    amount: storedAmount,
-                    currency: currencySave,
+                if (flowKind === "transfer") {
+                  // 转账模式
+                  if (!fromAccountId) {
+                    setError("请选择转出账户");
+                    return;
+                  }
+                  if (!toAccountId) {
+                    setError("请选择转入账户");
+                    return;
+                  }
+                  if (fromAccountId === toAccountId) {
+                    setError("转出账户和转入账户不能相同");
+                    return;
+                  }
+
+                  const fromAccount = accounts.find((a) => a.id === fromAccountId);
+                  if (!fromAccount) {
+                    setError("请选择有效的转出账户");
+                    return;
+                  }
+
+                  await insertTransfer(sb, {
+                    fromAccountId,
+                    toAccountId,
+                    title: "账户转账",
+                    amount: raw,
+                    currency: fromAccount.currency,
                     occurredOn,
                     notes: notesTrim === "" ? null : notesTrim,
                   });
                 } else {
-                  // 新建模式
-                  await insertTransactionAndUpdateBalance(sb, {
-                    accountId: selectedAccount.id,
-                    categoryId,
-                    title: selectedCategoryName,
-                    amount: storedAmount,
-                    currency: currencySave,
-                    occurredOn,
-                    notes: notesTrim === "" ? null : notesTrim,
-                  });
+                  // 支出/收入模式
+                  if (!selectedAccount) {
+                    setError("请选择账户");
+                    return;
+                  }
+                  if (!categoryId) {
+                    setError("请选择分类");
+                    return;
+                  }
+
+                  const storedAmount =
+                    flowKind === "expense" ? -Math.abs(raw) : Math.abs(raw);
+                  const currencySave = selectedAccount.currency;
+
+                  if (isEditMode && transaction) {
+                    await updateTransaction(sb, transaction.id, {
+                      accountId: selectedAccount.id,
+                      categoryId,
+                      categoryName: selectedCategoryName,
+                      title: selectedCategoryName,
+                      amount: storedAmount,
+                      currency: currencySave,
+                      occurredOn,
+                      notes: notesTrim === "" ? null : notesTrim,
+                    });
+                  } else {
+                    await insertTransactionAndUpdateBalance(sb, {
+                      accountId: selectedAccount.id,
+                      categoryId,
+                      categoryName: selectedCategoryName,
+                      title: selectedCategoryName,
+                      amount: storedAmount,
+                      currency: currencySave,
+                      occurredOn,
+                      notes: notesTrim === "" ? null : notesTrim,
+                    });
+                  }
                 }
                 onSaved();
                 onClose();
@@ -243,6 +285,7 @@ export function TransactionModal({
               }
             }}
           >
+            {/* 类型选择 */}
             <div>
               <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
                 类型
@@ -250,19 +293,21 @@ export function TransactionModal({
               <div className="flex rounded-xl border border-stone-200 p-0.5 dark:border-neutral-700">
                 {(
                   [
-                    { key: "expense" as const, label: "支出" },
-                    { key: "income" as const, label: "收入" },
-                  ] as const
+                    { key: "expense" as TransactionType, label: "支出" },
+                    { key: "income" as TransactionType, label: "收入" },
+                    { key: "transfer" as TransactionType, label: "转账" },
+                  ] as { key: TransactionType; label: string }[]
                 ).map(({ key, label }) => (
                   <button
                     key={key}
                     type="button"
                     onClick={() => setFlowKind(key)}
+                    disabled={isEditMode}
                     className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
                       flowKind === key
                         ? "bg-emerald-600 text-white shadow-sm dark:bg-emerald-500"
                         : "text-stone-600 hover:bg-stone-50 dark:text-stone-400 dark:hover:bg-neutral-800"
-                    }`}
+                    } ${isEditMode ? "opacity-50 cursor-not-allowed" : ""}`}
                   >
                     {label}
                   </button>
@@ -270,6 +315,7 @@ export function TransactionModal({
               </div>
             </div>
 
+            {/* 金额输入 */}
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
                 金额
@@ -287,6 +333,7 @@ export function TransactionModal({
               />
             </label>
 
+            {/* 日期 */}
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
                 日期
@@ -299,46 +346,104 @@ export function TransactionModal({
               />
             </label>
 
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
-                分类
-              </span>
-              <select
-                value={categoryId}
-                onChange={(e) => setCategoryId(e.target.value)}
-                className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
-              >
-                <option value="">选择分类…</option>
-                {categoryOptions.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* 转账专用表单 */}
+            {flowKind === "transfer" ? (
+              <>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
+                    从账户转出
+                  </span>
+                  <select
+                    value={fromAccountId}
+                    onChange={(e) => setFromAccountId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
+                  >
+                    <option value="">选择转出账户…</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}（{a.currency}）
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
-                账户
-              </span>
-              <select
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-                className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
-              >
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}（{a.currency}）
-                  </option>
-                ))}
-              </select>
-              {selectedAccount ? (
-                <p className="mt-1 text-xs text-stone-400">
-                  金额将以 {selectedAccount.currency} 记入该账户
-                </p>
-              ) : null}
-            </label>
+                <div className="flex items-center justify-center py-1">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-100 dark:bg-neutral-800">
+                    <ArrowRight className="h-4 w-4 text-stone-500" />
+                  </div>
+                </div>
 
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
+                    转入账户
+                  </span>
+                  <select
+                    value={toAccountId}
+                    onChange={(e) => setToAccountId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
+                  >
+                    <option value="">选择转入账户…</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}（{a.currency}）
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {fromAccountId && toAccountId && fromAccountId === toAccountId ? (
+                  <p className="text-sm text-rose-600 dark:text-rose-400">
+                    转出账户和转入账户不能相同
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* 分类选择 */}
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
+                    分类
+                  </span>
+                  <select
+                    value={categoryId}
+                    onChange={(e) => setCategoryId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
+                  >
+                    <option value="">选择分类…</option>
+                    {categoryOptions.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {/* 账户选择 */}
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
+                    账户
+                  </span>
+                  <select
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-4 dark:border-neutral-700 dark:bg-neutral-950"
+                  >
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}（{a.currency}）
+                      </option>
+                    ))}
+                  </select>
+                  {selectedAccount ? (
+                    <p className="mt-1 text-xs text-stone-400">
+                      金额将以 {selectedAccount.currency} 记入该账户
+                    </p>
+                  ) : null}
+                </label>
+              </>
+            )}
+
+            {/* 备注 */}
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-stone-600 dark:text-stone-400">
                 备注（可选）

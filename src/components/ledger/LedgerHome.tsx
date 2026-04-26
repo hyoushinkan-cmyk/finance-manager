@@ -54,11 +54,13 @@ export function LedgerHome() {
         mockTransactions.map((t) => ({
           id: t.id,
           title: t.title,
+          type: t.amount < 0 ? "expense" as const : "income" as const,
           categoryId: "",
           categoryName: t.category,
           amount: t.amount,
           currency: t.currency,
           accountName: t.accountName,
+          accountId: "",
           date: t.date,
           notes: null,
         })),
