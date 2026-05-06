@@ -289,6 +289,7 @@ export async function fetchTransactions(
       title,
       type,
       category_id,
+      category,
       amount,
       currency,
       occurred_on,
@@ -311,6 +312,7 @@ export async function fetchTransactions(
     title: string;
     type: string;
     category_id: string | null;
+    category: string | null;
     amount: unknown;
     currency: string;
     occurred_on: string;
@@ -351,10 +353,19 @@ export async function fetchTransactions(
   }
 
   return rows.map((r) => {
+    // 优先使用 categories 关联的名称，如果没有则使用 category 字段
+    let categoryName = "";
     const cat = r.categories;
-    const categoryName = Array.isArray(cat)
-      ? (cat[0]?.name ?? "")
-      : (cat?.name ?? "");
+    if (Array.isArray(cat)) {
+      categoryName = cat[0]?.name ?? "";
+    } else if (cat && typeof cat === "object" && "name" in cat) {
+      categoryName = (cat as { name: string }).name ?? "";
+    }
+    
+    // 如果关联的名称为空，尝试使用 category 字段
+    if (!categoryName && r.category) {
+      categoryName = r.category;
+    }
 
     return {
       id: r.id,
@@ -394,11 +405,14 @@ export async function fetchTransactionsForStats(
       amount,
       currency,
       occurred_on,
+      category,
       categories ( name )
     `)
     .gte("occurred_on", from)
     .lte("occurred_on", to)
     .neq("type", "transfer"); // 过滤掉转账记录
+
+  console.log("[DEBUG fetchTransactionsForStats] data:", data, "error:", error);
 
   if (error) throw error;
 
@@ -406,6 +420,7 @@ export async function fetchTransactionsForStats(
     amount: unknown;
     currency: string;
     occurred_on: string;
+    category: string | null;
     categories:
       | { name: string }
       | { name: string }[]
@@ -414,18 +429,141 @@ export async function fetchTransactionsForStats(
 
   return (data ?? []).map((r) => {
     const row = r as unknown as Row;
+    
+    // 优先使用 categories 关联的名称，如果没有则使用 category 字段
+    let categoryName = "";
     const cat = row.categories;
-    const categoryName = Array.isArray(cat)
-      ? (cat[0]?.name ?? "")
-      : (cat?.name ?? "");
+    if (Array.isArray(cat)) {
+      categoryName = cat[0]?.name ?? "";
+    } else if (cat && typeof cat === "object" && "name" in cat) {
+      categoryName = (cat as { name: string }).name ?? "";
+    }
+    
+    // 如果关联的名称为空，尝试使用 category 字段
+    if (!categoryName && row.category) {
+      categoryName = row.category;
+    }
 
     return {
       amount: num(row.amount),
       currency: row.currency as Currency,
-      category: categoryName,
+      category: categoryName || "未分类",
       occurred_on: (row.occurred_on as string).slice(0, 10),
     };
   });
+}
+
+export type DrilldownTransaction = {
+  id: string;
+  title: string;
+  amount: number;
+  currency: Currency;
+  occurred_on: string;
+  notes: string | null;
+  account_name: string;
+};
+
+/**
+ * 获取下钻明细数据
+ * @param sb Supabase 客户端
+ * @param categoryName 分类名称
+ * @param from 开始日期 (YYYY-MM-DD)
+ * @param to 结束日期 (YYYY-MM-DD)
+ * @returns 交易明细列表
+ */
+export async function fetchTransactionsForDrilldown(
+  sb: SupabaseClient,
+  categoryName: string,
+  from: string,
+  to: string,
+): Promise<DrilldownTransaction[]> {
+  // 先获取该分类的 category_id (用于验证分类存在)
+  const { error: catError } = await sb
+    .from("categories")
+    .select("id")
+    .eq("name", categoryName)
+    .single();
+
+  if (catError && catError.code !== "PGRST116") {
+    // 忽略 "未找到" 错误，继续尝试其他方式
+    console.warn("Category lookup warning:", catError);
+  }
+
+  // 查询交易记录
+  // 使用 category_name 直接匹配（兼容旧数据）
+  const { data, error } = await sb
+    .from("transactions")
+    .select(`
+      id,
+      title,
+      amount,
+      currency,
+      occurred_on,
+      notes,
+      account_id,
+      categories ( name )
+    `)
+    .gte("occurred_on", from)
+    .lte("occurred_on", to)
+    .neq("type", "transfer");
+
+  if (error) throw error;
+
+  // 获取所有相关账户名称
+  const allAccountIds = new Set<string>();
+  (data ?? []).forEach((r: Record<string, unknown>) => {
+    if (r.account_id) allAccountIds.add(r.account_id as string);
+  });
+
+  const accountNames: Record<string, string> = {};
+  if (allAccountIds.size > 0) {
+    const { data: accountsData } = await sb
+      .from("accounts")
+      .select("id, name")
+      .in("id", Array.from(allAccountIds));
+
+    if (accountsData) {
+      accountsData.forEach((acc: { id: string; name: string }) => {
+        accountNames[acc.id] = acc.name;
+      });
+    }
+  }
+
+  type Row = {
+    id: string;
+    title: string;
+    amount: unknown;
+    currency: string;
+    occurred_on: string;
+    notes: string | null;
+    account_id: string;
+    categories:
+      | { name: string }
+      | { name: string }[]
+      | null;
+  };
+
+  // 过滤并转换数据
+  return (data as Row[] ?? [])
+    .map((r) => {
+      const cat = r.categories;
+      const rowCategoryName = Array.isArray(cat)
+        ? (cat[0]?.name ?? "")
+        : (cat?.name ?? "");
+
+      return {
+        id: r.id,
+        title: r.title,
+        amount: num(r.amount),
+        currency: r.currency as Currency,
+        occurred_on: (r.occurred_on as string).slice(0, 10),
+        notes: r.notes ?? null,
+        account_name: accountNames[r.account_id] ?? "",
+        _rowCategoryName: rowCategoryName,
+      };
+    })
+    .filter((r) => r._rowCategoryName === categoryName || r.title === categoryName)
+    .map(({ _rowCategoryName, ...rest }) => rest as Omit<DrilldownTransaction, never>);
 }
 
 export function spendJpyOnDate(
@@ -514,7 +652,14 @@ export async function insertTransactionAndUpdateBalance(
     notes: string | null;
   },
 ): Promise<void> {
-  const userId = await requireUserId(sb);
+  // 尝试获取用户 ID，如果失败则继续（某些场景下可能没有登录）
+  let userId: string | null = null;
+  try {
+    userId = await requireUserId(sb);
+  } catch (err) {
+    console.warn("[recurring] 无法获取用户ID，跳过 user_id 字段:", err);
+  }
+
   const { data: account, error: accErr } = await sb
     .from("accounts")
     .select("balance")
@@ -527,7 +672,6 @@ export async function insertTransactionAndUpdateBalance(
   const nextBalance = currentBalance + params.amount;
 
   const row: Record<string, unknown> = {
-    user_id: userId,
     account_id: params.accountId,
     category_id: params.categoryId,
     category: params.categoryName,
@@ -535,11 +679,20 @@ export async function insertTransactionAndUpdateBalance(
     amount: params.amount,
     currency: params.currency,
     occurred_on: params.occurredOn,
+    type: params.amount >= 0 ? "income" : "expense",
   };
+  
+  // 只有获取到 userId 时才添加该字段
+  if (userId) {
+    row.user_id = userId;
+  }
+  
   if (params.notes != null && params.notes.trim() !== "") {
     row.notes = params.notes.trim();
   }
 
+  console.log("[DEBUG INSERT] 准备插入交易:", row);
+  
   const { data: insertResult, error: insErr } = await sb
     .from("transactions")
     .insert(row)
@@ -549,6 +702,7 @@ export async function insertTransactionAndUpdateBalance(
   
   if (insErr) throw insErr;
 
+  // 更新账户余额
   const { error: updErr } = await sb
     .from("accounts")
     .update({ balance: nextBalance })

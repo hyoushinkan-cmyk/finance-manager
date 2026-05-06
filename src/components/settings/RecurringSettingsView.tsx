@@ -10,8 +10,9 @@ import {
 } from "@/lib/supabase/client";
 import { fetchAccounts, fetchCategories, type AccountRow, type CategoryRow } from "@/lib/ledger-data";
 import {
-  loadRecurringRules,
-  saveRecurringRules,
+  fetchRecurringRules,
+  addRecurringRule,
+  deleteRecurringRule,
   type RecurringRule,
 } from "@/lib/recurring";
 
@@ -22,11 +23,34 @@ export function RecurringSettingsView() {
   const [modalOpen, setModalOpen] = useState(false);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [loading, setLoading] = useState(true);
 
+  // 从数据库加载规则
   useEffect(() => {
-    setRules(loadRecurringRules());
+    if (!isSupabaseConfigured()) {
+      setLoading(false);
+      return;
+    }
+    const sb = createBrowserSupabaseClient();
+    if (!sb) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    void (async () => {
+      try {
+        const loadedRules = await fetchRecurringRules(sb);
+        setRules(loadedRules);
+      } catch (e) {
+        console.error("加载循环记账规则失败:", e);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
+  // 加载账户和分类
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
     const sb = createBrowserSupabaseClient();
@@ -38,6 +62,35 @@ export function RecurringSettingsView() {
       },
     );
   }, []);
+
+  // 删除规则
+  const handleDelete = async (ruleId: string) => {
+    if (!isSupabaseConfigured()) return;
+    const sb = createBrowserSupabaseClient();
+    if (!sb) return;
+
+    try {
+      await deleteRecurringRule(sb, ruleId);
+      setRules((prev) => prev.filter((r) => r.id !== ruleId));
+    } catch (e) {
+      console.error("删除规则失败:", e);
+    }
+  };
+
+  // 添加规则
+  const handleAdd = async (rule: Omit<RecurringRule, "id">) => {
+    if (!isSupabaseConfigured()) return;
+    const sb = createBrowserSupabaseClient();
+    if (!sb) return;
+
+    try {
+      const newRule = await addRecurringRule(sb, rule);
+      setRules((prev) => [...prev, newRule]);
+      setModalOpen(false);
+    } catch (e) {
+      console.error("添加规则失败:", e);
+    }
+  };
 
   return (
     <>
@@ -55,72 +108,75 @@ export function RecurringSettingsView() {
         </p>
       </header>
 
-      <div className="mb-3 flex justify-end">
-        <button
-          type="button"
-          onClick={() => setModalOpen(true)}
-          className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
-        >
-          <Plus className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-          添加规则
-        </button>
-      </div>
-
-      <ul className="space-y-3">
-        {rules.length === 0 ? (
-          <li className="rounded-2xl border border-stone-200 bg-white px-4 py-8 text-center text-sm text-stone-500 dark:border-neutral-800 dark:bg-neutral-900">
-            暂无规则。添加后每月月底将自动入账。
-          </li>
-        ) : (
-          rules.map((r) => (
-            <li
-              key={r.id}
-              className="flex items-start gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-3.5 dark:border-neutral-800 dark:bg-neutral-900"
+      {loading ? (
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-8 text-center text-sm text-stone-500 dark:border-neutral-800 dark:bg-neutral-900">
+          加载中...
+        </div>
+      ) : !isSupabaseConfigured() ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+          请先在设置中配置 Supabase 并登录以使用循环记账功能
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setModalOpen(true)}
+              className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">{r.title}</p>
-                <p className="mt-0.5 text-sm tabular-nums text-stone-600 dark:text-stone-300">
-                  {r.kind === "expense" ? "支出" : "收入"}{" "}
-                  {Math.abs(r.amount).toLocaleString()} {r.currency} ·{" "}
-                  {r.frequency === "monthly" ? "每月月底" : "每周"}
-                </p>
-                <p className="mt-0.5 text-xs text-stone-400 dark:text-stone-500">
-                  {r.categoryName && <span>{r.categoryName} · </span>}
-                  {r.accountName && <span>{r.accountName}</span>}
-                </p>
-                {r.note ? (
-                  <p className="mt-1 text-xs text-stone-400">{r.note}</p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = rules.filter((x) => x.id !== r.id);
-                  setRules(next);
-                  saveRecurringRules(next);
-                }}
-                className="rounded-lg p-2 text-stone-500 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40"
-                aria-label="删除"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </li>
-          ))
-        )}
-      </ul>
+              <Plus className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
+              添加规则
+            </button>
+          </div>
 
-      <RecurringAddModal
-        open={modalOpen}
-        accounts={accounts}
-        categories={categories}
-        onClose={() => setModalOpen(false)}
-        onAdd={(rule) => {
-          const next = [...rules, rule];
-          setRules(next);
-          saveRecurringRules(next);
-          setModalOpen(false);
-        }}
-      />
+          <ul className="space-y-3">
+            {rules.length === 0 ? (
+              <li className="rounded-2xl border border-stone-200 bg-white px-4 py-8 text-center text-sm text-stone-500 dark:border-neutral-800 dark:bg-neutral-900">
+                暂无规则。添加后每月月底将自动入账。
+              </li>
+            ) : (
+              rules.map((r) => (
+                <li
+                  key={r.id}
+                  className="flex items-start gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-3.5 dark:border-neutral-800 dark:bg-neutral-900"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">{r.title}</p>
+                    <p className="mt-0.5 text-sm tabular-nums text-stone-600 dark:text-stone-300">
+                      {r.kind === "expense" ? "支出" : "收入"}{" "}
+                      {Math.abs(r.amount).toLocaleString()} {r.currency} ·{" "}
+                      {r.frequency === "monthly" ? "每月月底" : "每周"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-stone-400 dark:text-stone-500">
+                      {r.categoryName && <span>{r.categoryName} · </span>}
+                      {r.accountName && <span>{r.accountName}</span>}
+                    </p>
+                    {r.note ? (
+                      <p className="mt-1 text-xs text-stone-400">{r.note}</p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(r.id)}
+                    className="rounded-lg p-2 text-stone-500 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40"
+                    aria-label="删除"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+
+          <RecurringAddModal
+            open={modalOpen}
+            accounts={accounts}
+            categories={categories}
+            onClose={() => setModalOpen(false)}
+            onAdd={handleAdd}
+          />
+        </>
+      )}
     </>
   );
 }
@@ -136,7 +192,7 @@ function RecurringAddModal({
   accounts: AccountRow[];
   categories: CategoryRow[];
   onClose: () => void;
-  onAdd: (r: RecurringRule) => void;
+  onAdd: (r: Omit<RecurringRule, "id">) => void;
 }) {
   const titleId = useId();
   const [title, setTitle] = useState("");
@@ -226,10 +282,6 @@ function RecurringAddModal({
             if (!accountId || !categoryId) return;
             const signed = kind === "expense" ? -Math.abs(amt) : Math.abs(amt);
             onAdd({
-              id:
-                typeof crypto !== "undefined" && crypto.randomUUID
-                  ? crypto.randomUUID()
-                  : `${Date.now()}`,
               title: t,
               amount: signed,
               currency,

@@ -83,9 +83,11 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
     void applyMonthlyRecurringRules(sb).then((applied) => {
       if (applied > 0) {
         console.log(`[recurring] 自动入账 ${applied} 条循环记录`);
+        // 自动入账后刷新交易列表
+        void refresh();
       }
     });
-  }, []);
+  }, [refresh]);
 
   // 初始加载 + 响应 refreshTrigger 变化
   useEffect(() => {

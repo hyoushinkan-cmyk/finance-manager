@@ -44,6 +44,7 @@ export function CategoriesProvider({ children }: { children: ReactNode }) {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loading, setLoading] = useState(isSupabaseConfigured());
   const [error, setError] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const refresh = useCallback(async () => {
     if (!isSupabaseConfigured()) {
@@ -72,9 +73,14 @@ export function CategoriesProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // 触发刷新的函数
+  const triggerRefresh = useCallback(() => {
+    setRefreshTrigger((prev) => prev + 1);
+  }, []);
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, refreshTrigger]);
 
   const addCategory = useCallback(
     async (name: string, type: "expense" | "income") => {

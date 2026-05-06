@@ -2,9 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { insertTransactionAndUpdateBalance } from "@/lib/ledger-data";
 import type { Currency } from "@/lib/mock-data";
 
-export const RECURRING_STORAGE_KEY = "finance_app_recurring_rules";
-const LAST_RUN_KEY = "finance_app_recurring_last_run";
-
 export type RecurringRule = {
   id: string;
   title: string;
@@ -19,10 +16,159 @@ export type RecurringRule = {
   categoryName: string;
 };
 
-export function loadRecurringRules(): RecurringRule[] {
+// ====== 数据库操作函数 ======
+
+/**
+ * 从数据库加载用户的循环记账规则
+ */
+export async function fetchRecurringRules(sb: SupabaseClient): Promise<RecurringRule[]> {
+  const { data, error } = await sb
+    .from("recurring_rules")
+    .select(`
+      id,
+      title,
+      amount,
+      currency,
+      kind,
+      frequency,
+      note,
+      account_id,
+      category_id,
+      accounts (name),
+      categories (name)
+    `)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("[recurring] 获取规则失败:", error);
+    return [];
+  }
+
+  return (data ?? []).map((r) => {
+    // 处理 accounts 可能是数组或对象的情况
+    let accountName = "";
+    const acc = r.accounts;
+    if (Array.isArray(acc)) {
+      accountName = acc[0]?.name ?? "";
+    } else if (acc && typeof acc === "object" && "name" in acc) {
+      accountName = (acc as { name: string }).name ?? "";
+    }
+    
+    // 处理 categories 可能是数组或对象的情况
+    let categoryName = "";
+    const cat = r.categories;
+    if (Array.isArray(cat)) {
+      categoryName = cat[0]?.name ?? "";
+    } else if (cat && typeof cat === "object" && "name" in cat) {
+      categoryName = (cat as { name: string }).name ?? "";
+    }
+    
+    return {
+      id: r.id as string,
+      title: r.title as string,
+      amount: Number(r.amount),
+      currency: r.currency as Currency,
+      kind: r.kind as "expense" | "income",
+      frequency: r.frequency as "monthly" | "weekly",
+      note: (r.note as string) || "",
+      accountId: r.account_id as string,
+      accountName,
+      categoryId: r.category_id as string,
+      categoryName,
+    };
+  });
+}
+
+/**
+ * 添加新的循环记账规则
+ */
+export async function addRecurringRule(
+  sb: SupabaseClient,
+  rule: Omit<RecurringRule, "id">
+): Promise<RecurringRule> {
+  const { data, error } = await sb
+    .from("recurring_rules")
+    .insert({
+      title: rule.title,
+      amount: rule.amount,
+      currency: rule.currency,
+      kind: rule.kind,
+      frequency: rule.frequency,
+      note: rule.note || null,
+      account_id: rule.accountId,
+      category_id: rule.categoryId,
+    })
+    .select(`
+      id,
+      title,
+      amount,
+      currency,
+      kind,
+      frequency,
+      note,
+      account_id,
+      category_id,
+      accounts (name),
+      categories (name)
+    `)
+    .single();
+
+  if (error) {
+    console.error("[recurring] 添加规则失败:", error);
+    throw error;
+  }
+
+  // 处理 accounts 可能是数组或对象的情况
+  let accountName = "";
+  const acc = data.accounts;
+  if (Array.isArray(acc)) {
+    accountName = acc[0]?.name ?? "";
+  } else if (acc && typeof acc === "object" && "name" in acc) {
+    accountName = (acc as { name: string }).name ?? "";
+  }
+  
+  // 处理 categories 可能是数组或对象的情况
+  let categoryName = "";
+  const cat = data.categories;
+  if (Array.isArray(cat)) {
+    categoryName = cat[0]?.name ?? "";
+  } else if (cat && typeof cat === "object" && "name" in cat) {
+    categoryName = (cat as { name: string }).name ?? "";
+  }
+  
+  return {
+    id: data.id as string,
+    title: data.title as string,
+    amount: Number(data.amount),
+    currency: data.currency as Currency,
+    kind: data.kind as "expense" | "income",
+    frequency: data.frequency as "monthly" | "weekly",
+    note: (data.note as string) || "",
+    accountId: data.account_id as string,
+    accountName,
+    categoryId: data.category_id as string,
+    categoryName,
+  };
+}
+
+/**
+ * 删除循环记账规则
+ */
+export async function deleteRecurringRule(sb: SupabaseClient, ruleId: string): Promise<void> {
+  const { error } = await sb.from("recurring_rules").delete().eq("id", ruleId);
+  if (error) {
+    console.error("[recurring] 删除规则失败:", error);
+    throw error;
+  }
+}
+
+/**
+ * 从本地 localStorage 加载规则（兼容旧数据迁移）
+ */
+export function loadRecurringRulesFromLocal(): RecurringRule[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(RECURRING_STORAGE_KEY);
+    const raw = window.localStorage.getItem("finance_app_recurring_rules");
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -39,9 +185,18 @@ export function loadRecurringRules(): RecurringRule[] {
   }
 }
 
-export function saveRecurringRules(rules: RecurringRule[]) {
-  window.localStorage.setItem(RECURRING_STORAGE_KEY, JSON.stringify(rules));
+/**
+ * 清除本地 localStorage 中的旧规则（迁移后调用）
+ */
+export function clearLocalRecurringRules(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem("finance_app_recurring_rules");
+  window.localStorage.removeItem("finance_app_recurring_last_run");
 }
+
+// ====== 自动入账相关 ======
+
+const LAST_RUN_KEY = "finance_app_recurring_last_run";
 
 /** 返回某年某月的最后一天，格式 "YYYY-MM-DD" */
 function getLastDayOfMonth(year: number, month: number): string {
@@ -74,9 +229,10 @@ function setLastRun(yearMonth: string) {
 export async function applyMonthlyRecurringRules(
   sb: SupabaseClient,
 ): Promise<number> {
-  const rules = loadRecurringRules();
+  // 从数据库加载规则
+  const rules = await fetchRecurringRules(sb);
   const monthlyRules = rules.filter(
-    (r) =>
+    (r: RecurringRule) =>
       r.frequency === "monthly" &&
       r.accountId &&
       r.categoryId,
