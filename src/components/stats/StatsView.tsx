@@ -112,15 +112,10 @@ function getPresetRange(preset: DateRangePreset): DateRange | null {
         twoMonthsAgoMonth += 12;
         twoMonthsAgoYear -= 1;
       }
-      let oneMonthAgoMonth = month - 1;
-      let oneMonthAgoYear = year;
-      while (oneMonthAgoMonth <= 0) {
-        oneMonthAgoMonth += 12;
-        oneMonthAgoYear -= 1;
-      }
+      // 结束日期是 twoMonthsAgoMonth 月的最后一天（不是上月）
       return {
         start: createUTCDate(twoMonthsAgoYear, twoMonthsAgoMonth, 1),
-        end: createUTCDateLastDayOfMonth(oneMonthAgoYear, oneMonthAgoMonth),
+        end: createUTCDateLastDayOfMonth(twoMonthsAgoYear, twoMonthsAgoMonth),
         label: "上上月",
       };
     }
@@ -138,10 +133,10 @@ function toDateString(d: Date): string {
 }
 
 function monthLabel(month1to12: number, year?: number): string {
-  if (year && year !== new Date().getFullYear()) {
-    return `${year}年${month1to12}月`;
-  }
-  return `${month1to12}月`;
+  // 显示 YY/MM 格式，如 25/05
+  const shortYear = year ? String(year).slice(-2) : "";
+  const m = String(month1to12).padStart(2, "0");
+  return shortYear ? `${shortYear}/${m}` : m;
 }
 
 function buildCategoryTrend(
@@ -607,24 +602,25 @@ export function StatsView() {
             </p>
           ) : (
             <>
-              <div className="flex h-40 items-end justify-between gap-3 border-b border-stone-100 pb-2 dark:border-neutral-800">
+              <div className="flex items-end justify-between gap-2 overflow-x-auto border-b border-stone-100 pb-2 dark:border-neutral-800">
                 {categoryTrend.map((t) => (
                   <div
                     key={t.key}
-                    className="flex flex-1 flex-col items-center gap-2"
+                    className="flex flex-1 min-w-0 flex-col items-center gap-1"
                   >
-                    <div className="flex h-32 w-full items-end justify-center">
+                    <div className="flex h-28 w-full flex-col items-center justify-end">
+                      <span className="mb-1 text-[10px] font-medium text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                        {t.expense > 0 ? `¥${(t.expense / 1000).toFixed(0)}k` : ""}
+                      </span>
                       <div
-                        className="w-4 cursor-pointer rounded-t bg-rose-500/90 transition-all hover:bg-rose-500"
+                        className="w-3 cursor-pointer rounded-t bg-rose-500/90 transition-all hover:bg-rose-500"
                         style={{
-                          height: `${(t.expense / maxBar) * 100}%`,
-                          minHeight: "4px",
+                          height: `${Math.max((t.expense / maxBar) * 100, 2)}%`,
                         }}
-                        title={`${t.label} ¥${t.expense.toLocaleString("ja-JP")}`}
                         onClick={() => handleTrendClick(t.key, t.expense)}
                       />
                     </div>
-                    <span className="text-[11px] text-stone-500">{t.label}</span>
+                    <span className="text-[10px] text-stone-500 whitespace-nowrap">{t.label}</span>
                   </div>
                 ))}
               </div>
