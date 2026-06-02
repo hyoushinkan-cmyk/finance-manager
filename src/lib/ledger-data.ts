@@ -650,6 +650,7 @@ export async function insertTransactionAndUpdateBalance(
     currency: Currency;
     occurredOn: string;
     notes: string | null;
+    recurringRuleId?: string; // 可选：关联的循环记账规则ID
   },
 ): Promise<void> {
   // 尝试获取用户 ID，如果失败则继续（某些场景下可能没有登录）
@@ -689,6 +690,11 @@ export async function insertTransactionAndUpdateBalance(
   
   if (params.notes != null && params.notes.trim() !== "") {
     row.notes = params.notes.trim();
+  }
+
+  // 如果有循环规则ID，记录关联
+  if (params.recurringRuleId) {
+    row.recurring_rule_id = params.recurringRuleId;
   }
 
   console.log("[DEBUG INSERT] 准备插入交易:", row);

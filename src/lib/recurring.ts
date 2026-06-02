@@ -220,6 +220,31 @@ function setLastRun(yearMonth: string) {
 }
 
 /**
+ * 检查某月份是否已存在指定标题的交易记录（用于去重）
+ */
+async function checkTransactionExists(
+  sb: SupabaseClient,
+  title: string,
+  occurredOn: string,
+): Promise<boolean> {
+  const yearMonth = occurredOn.slice(0, 7); // "YYYY-MM"
+  const { data, error } = await sb
+    .from("transactions")
+    .select("id")
+    .eq("title", title)
+    .gte("occurred_on", `${yearMonth}-01`)
+    .lte("occurred_on", `${yearMonth}-31`)
+    .limit(1);
+
+  if (error) {
+    console.warn("[recurring] 检查交易存在性失败:", error);
+    return false; // 出错时放行，避免漏记
+  }
+
+  return (data ?? []).length > 0;
+}
+
+/**
  * 在每次 App 初始化时调用。
  * 如果当前月份比上次执行月份更新，则把上个月的所有 monthly 规则
  * 以上个月最后一天为日期自动插入 transactions。
@@ -261,6 +286,13 @@ export async function applyMonthlyRecurringRules(
   let applied = 0;
   for (const rule of monthlyRules) {
     try {
+      // 去重检查：该月份是否已存在同名交易
+      const exists = await checkTransactionExists(sb, rule.title, occurredOn);
+      if (exists) {
+        console.log(`[recurring] 跳过重复：${rule.title} (${occurredOn}) 已存在`);
+        continue;
+      }
+
       await insertTransactionAndUpdateBalance(sb, {
         accountId: rule.accountId,
         categoryId: rule.categoryId,
@@ -270,8 +302,10 @@ export async function applyMonthlyRecurringRules(
         currency: rule.currency,
         occurredOn,
         notes: rule.note || null,
+        recurringRuleId: rule.id, // 记录来自哪个循环规则
       });
       applied++;
+      console.log(`[recurring] 成功入账：${rule.title} (${occurredOn})`);
     } catch (err) {
       console.error(`[recurring] 自动入账失败 (${rule.title}):`, err);
     }
