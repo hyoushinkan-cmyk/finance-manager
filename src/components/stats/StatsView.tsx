@@ -30,6 +30,17 @@ type DateRange = {
 
 type DateRangePreset = "this-month" | "last-month" | "two-months-ago" | "custom";
 
+type IncomeExpenseTab = "income" | "expense";
+
+// 分类比较数据
+type CategoryComparison = {
+  name: string;
+  amount: number;
+  projected: number;
+  diff: number;
+  comparisonLabel: string;
+};
+
 type DrilldownState = {
   open: boolean;
   categoryName: string;
@@ -233,6 +244,76 @@ function isValidDateRange(start: Date, end: Date): boolean {
   return !isNaN(start.getTime()) && !isNaN(end.getTime()) && start <= end;
 }
 
+/**
+ * 计算区间比较数据
+ * @param currentItems 当前区间的交易数据
+ * @param compareItems 用来比较的区间的交易数据
+ * @param currentStart 当前区间开始
+ * @param compareStart 比较区间开始
+ * @param compareEnd 比较区间结束
+ * @param currentDayCount 当前区间天数
+ * @param comparisonLabel 比较标签
+ * @returns 按分类分组的比较数据
+ */
+function buildComparisonByRange(
+  currentItems: TxAgg[],
+  compareItems: TxAgg[],
+  currentStart: Date,
+  compareStart: Date,
+  compareEnd: Date,
+  currentDayCount: number,
+  comparisonLabel: string,
+): CategoryComparison[] {
+  // 汇总比较区间的支出
+  const compareMap = new Map<string, number>();
+  for (const t of compareItems) {
+    if (t.amount < 0) {
+      const jpy = amountInJpy(Math.abs(t.amount), t.currency);
+      const existing = compareMap.get(t.category) ?? 0;
+      compareMap.set(t.category, existing + jpy);
+    }
+  }
+
+  // 计算比较区间的天数
+  const compareDays = Math.max(
+    Math.round((compareEnd.getTime() - compareStart.getTime()) / (1000 * 60 * 60 * 24)) + 1,
+    1
+  );
+
+  // 汇总当前区间的支出
+  const currentMap = new Map<string, number>();
+  for (const t of currentItems) {
+    if (t.amount < 0) {
+      const jpy = amountInJpy(Math.abs(t.amount), t.currency);
+      const existing = currentMap.get(t.category) ?? 0;
+      currentMap.set(t.category, existing + jpy);
+    }
+  }
+
+  // 构建比较数据
+  const allCategories = new Set([...compareMap.keys(), ...currentMap.keys()]);
+  const result: CategoryComparison[] = [];
+
+  for (const category of allCategories) {
+    const compareTotal = compareMap.get(category) ?? 0;
+    const currentAmount = currentMap.get(category) ?? 0;
+    const dailyAvg = Math.round(compareTotal / compareDays);
+    const projected = dailyAvg * currentDayCount;
+    const diff = currentAmount - projected;
+
+    result.push({
+      name: category,
+      amount: Math.round(currentAmount),
+      projected: Math.round(projected),
+      diff: Math.round(diff),
+      comparisonLabel,
+    });
+  }
+
+  // 按金额降序排列
+  return result.sort((a, b) => b.amount - a.amount);
+}
+
 export function StatsView() {
   const [selectedPreset, setSelectedPreset] = useState<DateRangePreset>("this-month");
   const [customStart, setCustomStart] = useState<string>("");
@@ -242,6 +323,12 @@ export function StatsView() {
   const [subtitle, setSubtitle] = useState("本月概览（演示数据）");
   const [monthIncome, setMonthIncome] = useState(DEMO_MONTH_INCOME);
   const [monthExpense, setMonthExpense] = useState(DEMO_MONTH_EXPENSE);
+
+  // 收入/支出 Tab 切换
+  const [incomeExpenseTab, setIncomeExpenseTab] = useState<IncomeExpenseTab>("expense");
+
+  // 月度比较数据（仅本月显示）
+  const [categoryComparison, setCategoryComparison] = useState<CategoryComparison[]>([]);
 
   // 下钻状态
   const [drilldown, setDrilldown] = useState<DrilldownState>({
@@ -316,9 +403,85 @@ export function StatsView() {
         console.log("[DEBUG loadRangeData] 分类占比结果:", share);
         setCategoryShare(share);
         setSubtitle(`${range.label}概览`);
+
+        // 根据不同区间加载比较数据
+        const now = new Date();
+        const nowUTCYear = now.getUTCFullYear();
+        const nowUTCMonth = now.getUTCMonth() + 1;
+        const nowUTCDay = now.getUTCDate();
+        
+        // 计算当前区间的天数
+        const currentDays = Math.round((range.end.getTime() - range.start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        
+        let compareStart: Date;
+        let compareEnd: Date;
+        let comparisonLabel: string;
+        
+        if (selectedPreset === "custom") {
+          // 自定义区间：往前推同样的天数
+          compareStart = new Date(range.start);
+          compareStart.setUTCDate(compareStart.getUTCDate() - currentDays);
+          compareEnd = new Date(range.start);
+          compareEnd.setUTCDate(compareEnd.getUTCDate() - 1);
+          comparisonLabel = "上期";
+        } else if (selectedPreset === "this-month") {
+          // 本月 vs 上月整月
+          const lastMonth = nowUTCMonth === 1 ? 12 : nowUTCMonth - 1;
+          const lastMonthYear = nowUTCMonth === 1 ? nowUTCYear - 1 : nowUTCYear;
+          compareStart = createUTCDate(lastMonthYear, lastMonth, 1);
+          compareEnd = createUTCDateLastDayOfMonth(lastMonthYear, lastMonth);
+          comparisonLabel = "上月日均";
+        } else if (selectedPreset === "last-month") {
+          // 上月 vs 上上月整月
+          let twoMonthsAgoMonth = nowUTCMonth - 2;
+          let twoMonthsAgoYear = nowUTCYear;
+          while (twoMonthsAgoMonth <= 0) {
+            twoMonthsAgoMonth += 12;
+            twoMonthsAgoYear -= 1;
+          }
+          compareStart = createUTCDate(twoMonthsAgoYear, twoMonthsAgoMonth, 1);
+          compareEnd = createUTCDateLastDayOfMonth(twoMonthsAgoYear, twoMonthsAgoMonth);
+          comparisonLabel = "上上月日均";
+        } else {
+          // two-months-ago: vs 上上上月整月
+          let threeMonthsAgoMonth = nowUTCMonth - 3;
+          let threeMonthsAgoYear = nowUTCYear;
+          while (threeMonthsAgoMonth <= 0) {
+            threeMonthsAgoMonth += 12;
+            threeMonthsAgoYear -= 1;
+          }
+          compareStart = createUTCDate(threeMonthsAgoYear, threeMonthsAgoMonth, 1);
+          compareEnd = createUTCDateLastDayOfMonth(threeMonthsAgoYear, threeMonthsAgoMonth);
+          comparisonLabel = "上上上月日均";
+        }
+        
+        const compareFrom = toDateString(compareStart);
+        const compareTo = toDateString(compareEnd);
+        
+        // 加载比较区间数据
+        const compareRows = await fetchTransactionsForStats(sb, compareFrom, compareTo);
+        const compareItems = compareRows.map((r) => ({
+          amount: r.amount,
+          currency: r.currency,
+          category: r.category,
+          date: r.occurred_on,
+        }));
+
+        // 构建比较数据
+        const comparison = buildComparisonByRange(
+          items,
+          compareItems,
+          range.start,
+          compareStart,
+          compareEnd,
+          currentDays,
+          comparisonLabel
+        );
+        setCategoryComparison(comparison);
       } catch (e) {
         console.error(e);
         setSubtitle(`${range.label}概览（加载失败）`);
+        setCategoryComparison([]);
       }
     })();
   }, []);
@@ -524,51 +687,107 @@ export function StatsView() {
         </div>
       </section>
 
-      {/* 分类占比 */}
+      {/* 收入/支出 Tab + 分类占比 */}
       <section className="mb-8">
-        <h2 className="mb-3 text-sm font-semibold text-stone-600 dark:text-stone-400">
-          分类占比
-        </h2>
-        <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
-          {categoryShare.length === 0 ? (
-            <p className="py-8 text-center text-sm text-stone-500">
-              暂无支出分类数据
-            </p>
-          ) : (
-            <>
-              <div className="mb-4 flex h-8 w-full overflow-hidden rounded-lg">
-                {categoryShare.map((c, i) => (
-                  <div
-                    key={`bar-${i}-${c.name}`}
-                    className={`${hues[i % hues.length]} first:rounded-l-lg last:rounded-r-lg cursor-pointer transition-opacity hover:opacity-80`}
-                    style={{ width: `${c.pct}%` }}
-                    title={`${c.name} ${c.pct}%`}
-                    onClick={() => handleCategoryClick(c.name, c.amount)}
-                  />
-                ))}
-              </div>
-              <ul className="space-y-2">
-                {categoryShare.map((c, i) => (
-                  <li
-                    key={`row-${i}-${c.name}`}
-                    className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800"
-                    onClick={() => handleCategoryClick(c.name, c.amount)}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${hues[i % hues.length]}`}
-                      />
-                      {c.name}
-                    </span>
-                    <span className="tabular-nums text-stone-600 dark:text-stone-300">
-                      {c.pct}% · ¥{c.amount.toLocaleString("ja-JP")}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+        {/* Tab 切换 */}
+        <div className="mb-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setIncomeExpenseTab("expense")}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+              incomeExpenseTab === "expense"
+                ? "bg-rose-500 text-white shadow-sm"
+                : "border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-stone-400 dark:hover:bg-neutral-800"
+            }`}
+          >
+            支出
+          </button>
+          <button
+            type="button"
+            onClick={() => setIncomeExpenseTab("income")}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+              incomeExpenseTab === "income"
+                ? "bg-emerald-600 text-white shadow-sm dark:bg-emerald-500"
+                : "border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-stone-400 dark:hover:bg-neutral-800"
+            }`}
+          >
+            收入
+          </button>
         </div>
+
+        {/* 支出模式：显示分类占比 */}
+        {incomeExpenseTab === "expense" ? (
+          <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <h3 className="mb-3 text-sm font-semibold text-stone-600 dark:text-stone-400">分类占比</h3>
+            {categoryShare.length === 0 ? (
+              <p className="py-8 text-center text-sm text-stone-500">
+                暂无支出分类数据
+              </p>
+            ) : (
+              <>
+                <div className="mb-4 flex h-8 w-full overflow-hidden rounded-lg">
+                  {categoryShare.map((c, i) => (
+                    <div
+                      key={`bar-${i}-${c.name}`}
+                      className={`${hues[i % hues.length]} first:rounded-l-lg last:rounded-r-lg cursor-pointer transition-opacity hover:opacity-80`}
+                      style={{ width: `${c.pct}%` }}
+                      title={`${c.name} ${c.pct}%`}
+                      onClick={() => handleCategoryClick(c.name, c.amount)}
+                    />
+                  ))}
+                </div>
+                <ul className="space-y-2">
+                  {categoryShare.map((c, i) => {
+                    // 查找该分类的比较数据
+                    const comparison = categoryComparison.find((comp) => comp.name === c.name);
+                    const diffText = comparison && comparison.diff !== 0
+                      ? comparison.diff > 0
+                        ? `较${comparison.comparisonLabel}多¥${Math.abs(comparison.diff).toLocaleString("ja-JP")}`
+                        : `较${comparison.comparisonLabel}少¥${Math.abs(comparison.diff).toLocaleString("ja-JP")}`
+                      : null;
+
+                    return (
+                      <li
+                        key={`row-${i}-${c.name}`}
+                        className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800"
+                        onClick={() => handleCategoryClick(c.name, c.amount)}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-full ${hues[i % hues.length]}`}
+                          />
+                          {c.name}
+                        </span>
+                        <span className="flex flex-col items-end gap-0.5">
+                          <span className="tabular-nums text-stone-600 dark:text-stone-300">
+                            {c.pct}% · ¥{c.amount.toLocaleString("ja-JP")}
+                          </span>
+                          {diffText && (
+                            <span className={`text-[10px] ${
+                              comparison && comparison.diff > 0
+                                ? "text-rose-500"
+                                : "text-emerald-500"
+                            }`}>
+                              {diffText}
+                            </span>
+                          )}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </div>
+        ) : (
+          /* 收入模式：只显示总收入 */
+          <div className="rounded-2xl border border-stone-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
+            <h3 className="mb-3 text-sm font-semibold text-stone-600 dark:text-stone-400">收入总计</h3>
+            <p className="text-3xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+              ¥{monthIncome.toLocaleString("ja-JP")}
+            </p>
+          </div>
+        )}
       </section>
 
       {/* 分类筛选 & 月度趋势 */}

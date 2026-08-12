@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Pencil, Trash2, Search, X, ChevronDown, ChevronUp } from "lucide-react";
 import { mockAccounts, mockTransactions } from "@/lib/mock-data";
 import {
   createBrowserSupabaseClient,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/ledger-data";
 import { TransactionModal } from "./TransactionModal";
 import { useTransactions } from "@/contexts/TransactionsContext";
+import { useCategories } from "@/contexts/CategoriesContext";
 
 function formatMoney(amount: number, currency: string) {
   const sign = amount < 0 ? "-" : "+";
@@ -44,8 +45,20 @@ export function LedgerHome() {
   const [loading, setLoading] = useState(isSupabaseConfigured());
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // 搜索相关状态
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchCategory, setSearchCategory] = useState("");
+  const [searchAccount, setSearchAccount] = useState("");
+  const [searchDateFrom, setSearchDateFrom] = useState("");
+  const [searchDateTo, setSearchDateTo] = useState("");
+  const [searchAmountMin, setSearchAmountMin] = useState("");
+  const [searchAmountMax, setSearchAmountMax] = useState("");
+  const [searchResult, setSearchResult] = useState<TransactionListItem[] | null>(null);
+
   // 使用 Context 通知其他页面刷新
   const { triggerRefresh } = useTransactions();
+  const { categories } = useCategories();
 
   const refresh = useCallback(async () => {
     const sb = createBrowserSupabaseClient();
@@ -155,6 +168,70 @@ export function LedgerHome() {
     setEditingTransaction(null);
   };
 
+  // 搜索处理函数
+  const handleSearch = () => {
+    const filtered = transactions.filter((t) => {
+      // 关键字搜索（标题 + 备注）
+      if (searchKeyword) {
+        const keyword = searchKeyword.toLowerCase();
+        const titleMatch = t.title.toLowerCase().includes(keyword);
+        const notesMatch = t.notes ? t.notes.toLowerCase().includes(keyword) : false;
+        if (!titleMatch && !notesMatch) {
+          return false;
+        }
+      }
+      // 分类搜索
+      if (searchCategory && t.categoryName !== searchCategory) {
+        return false;
+      }
+      // 账户搜索
+      if (searchAccount && t.accountName !== searchAccount) {
+        return false;
+      }
+      // 日期范围搜索
+      if (searchDateFrom && t.date < searchDateFrom) {
+        return false;
+      }
+      if (searchDateTo && t.date > searchDateTo) {
+        return false;
+      }
+      // 金额范围搜索
+      if (searchAmountMin) {
+        const min = parseFloat(searchAmountMin);
+        if (!isNaN(min) && Math.abs(t.amount) < min) {
+          return false;
+        }
+      }
+      if (searchAmountMax) {
+        const max = parseFloat(searchAmountMax);
+        if (!isNaN(max) && Math.abs(t.amount) > max) {
+          return false;
+        }
+      }
+      return true;
+    });
+    setSearchResult(filtered);
+  };
+
+  // 清空搜索
+  const handleClearSearch = () => {
+    setSearchKeyword("");
+    setSearchCategory("");
+    setSearchAccount("");
+    setSearchDateFrom("");
+    setSearchDateTo("");
+    setSearchAmountMin("");
+    setSearchAmountMax("");
+    setSearchResult(null);
+    setSearchOpen(false);
+  };
+
+  // 判断是否有搜索条件
+  const hasSearchCriteria = searchKeyword || searchCategory || searchAccount || searchDateFrom || searchDateTo || searchAmountMin || searchAmountMax;
+
+  // 用于显示的交易列表（搜索结果或全部）
+  const displayTransactions = searchResult !== null ? searchResult : transactions;
+
   return (
     <>
       <header className="mb-6">
@@ -191,21 +268,148 @@ export function LedgerHome() {
         </div>
       </section>
 
+      {/* 搜索按钮 */}
+      <button
+        type="button"
+        onClick={() => setSearchOpen(!searchOpen)}
+        className={`mb-4 w-full rounded-xl px-4 py-2.5 text-sm font-medium transition flex items-center justify-center gap-2 ${
+          searchOpen || hasSearchCriteria
+            ? "bg-emerald-100 text-emerald-700 border border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700"
+            : "border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-stone-400 dark:hover:bg-neutral-800"
+        }`}
+      >
+        <Search className="h-4 w-4" />
+        {searchOpen ? "收起搜索" : "搜索记录"}
+      </button>
+
+      {/* 搜索表单 */}
+      {searchOpen && (
+        <section className="mb-6 rounded-2xl border border-stone-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+          <div className="grid gap-3">
+            {/* 关键字搜索（标题 + 备注） */}
+            <div>
+              <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">关键字</label>
+              <input
+                type="text"
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                placeholder="搜索标题或备注"
+                className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+              />
+            </div>
+
+            {/* 分类和账户搜索 */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">分类</label>
+                <select
+                  value={searchCategory}
+                  onChange={(e) => setSearchCategory(e.target.value)}
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+                >
+                  <option value="">全部分类</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.name}>{cat.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">账户</label>
+                <select
+                  value={searchAccount}
+                  onChange={(e) => setSearchAccount(e.target.value)}
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+                >
+                  <option value="">全部账户</option>
+                  {accounts.map((acc) => (
+                    <option key={acc.id} value={acc.name}>{acc.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* 日期范围搜索 */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">开始日期</label>
+                <input
+                  type="date"
+                  value={searchDateFrom}
+                  onChange={(e) => setSearchDateFrom(e.target.value)}
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">结束日期</label>
+                <input
+                  type="date"
+                  value={searchDateTo}
+                  onChange={(e) => setSearchDateTo(e.target.value)}
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+                />
+              </div>
+            </div>
+
+            {/* 金额范围搜索 */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">最小金额</label>
+                <input
+                  type="number"
+                  value={searchAmountMin}
+                  onChange={(e) => setSearchAmountMin(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-stone-500 dark:text-stone-400">最大金额</label>
+                <input
+                  type="number"
+                  value={searchAmountMax}
+                  onChange={(e) => setSearchAmountMax(e.target.value)}
+                  placeholder="无限"
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2 dark:border-neutral-700 dark:bg-neutral-950 dark:text-stone-200"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 搜索按钮组 */}
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={handleSearch}
+              className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700"
+            >
+              搜索
+            </button>
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              className="flex-1 rounded-lg border border-stone-200 px-4 py-2.5 text-sm font-medium text-stone-600 transition hover:bg-stone-50 dark:border-neutral-700 dark:text-stone-400 dark:hover:bg-neutral-800"
+            >
+              清空
+            </button>
+          </div>
+        </section>
+      )}
+
       <section>
         <h2 className="mb-3 text-sm font-semibold text-stone-600 dark:text-stone-400">
-          最近记录
+          {searchResult !== null ? `搜索结果 (${searchResult.length})` : "最近记录"}
         </h2>
         <ul className="divide-y divide-stone-100 overflow-hidden rounded-2xl border border-stone-200 bg-white dark:divide-neutral-800 dark:border-neutral-800 dark:bg-neutral-900">
           {loading ? (
             <li className="px-4 py-6 text-center text-sm text-stone-500">
               加载中…
             </li>
-          ) : transactions.length === 0 ? (
+          ) : displayTransactions.length === 0 ? (
             <li className="px-4 py-6 text-center text-sm text-stone-500">
-              暂无记录
+              {searchResult !== null ? "找不到该记录" : "暂无记录"}
             </li>
           ) : (
-            transactions.map((t) => (
+            displayTransactions.map((t) => (
               <li
                 key={t.id}
                 className="flex items-center justify-between gap-3 px-4 py-3.5"
